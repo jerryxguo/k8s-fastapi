@@ -40,19 +40,11 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: pants package src/app:docker
 
-      - name: Debug GitHub OIDC inputs
-        run: |
-          echo "GITHUB_REF=${GITHUB_REF}"
-          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
-          echo "GITHUB_ENVIRONMENT=${GITHUB_ENVIRONMENT:-<none>}"
-          echo "AWS_ROLE_ARN=${{ vars.AWS_ROLE_ARN }}"
-          echo "AWS_REGION=${{ vars.AWS_REGION }}"
-          echo "ECR_REPOSITORY=${{ vars.ECR_REPOSITORY }}"
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          role-skip-session-tag: true
 
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr-login
