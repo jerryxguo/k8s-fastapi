@@ -37,7 +37,9 @@ docker_environment(
     image="pantsbuild/wheel_build_x86_64:v1-568cfc69e",
 )
 
-__defaults__({
-    pex_binary: dict(environment="local_linux"),
-    docker_image: dict(build_platform=["linux/amd64"]),
-})
+__defaults__(
+    {
+        pex_binary: dict(environment="local_linux"),
+        docker_image: dict(build_platform=["linux/amd64"]),
+    }
+)
