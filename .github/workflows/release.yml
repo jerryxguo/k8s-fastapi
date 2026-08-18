@@ -31,14 +31,6 @@ jobs:
   build:
     needs: [code-check, unit-test]
     uses: ./.github/workflows/reusable-build-and-push.yml
-    # Required even for a same-repo reusable workflow: declaring
-    # `environment:` in the CALLED workflow's job is not, by itself, enough
-    # for `${{ secrets.AWS_ROLE_ARN }}` to resolve there -- without
-    # `secrets: inherit` here, every environment-scoped secret resolves to
-    # "" at the called workflow's runtime (see github/docs#44458), which is
-    # exactly what produced "Credentials could not be loaded" even after the
-    # secret was added to the environment.
-    secrets: inherit
 
   deploy-development:
     needs: build
@@ -46,14 +38,12 @@ jobs:
     with:
       environment: development
       image: ${{ needs.build.outputs.image }}
-    secrets: inherit
 
   smoke-test-development:
     needs: deploy-development
     uses: ./.github/workflows/reusable-smoke-test.yml
     with:
       environment: development
-    secrets: inherit
 
   deploy-production:
     needs: [build, smoke-test-development]
@@ -61,11 +51,9 @@ jobs:
     with:
       environment: production
       image: ${{ needs.build.outputs.image }}
-    secrets: inherit
 
   smoke-test-production:
     needs: deploy-production
     uses: ./.github/workflows/reusable-smoke-test.yml
     with:
       environment: production
-    secrets: inherit
