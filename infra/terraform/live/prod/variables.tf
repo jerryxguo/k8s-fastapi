@@ -29,7 +29,7 @@ variable "admin_principal_arn" {
 }
 
 variable "github_org" {
-  description = "Your actual GitHub org or username that owns this repo () -- required, no default. This feeds the cicd_role module's OIDC trust condition (sub == \"repo:${github_org}/${github_repo}:environment:production\"); leaving this at a placeholder value makes the IAM role trust a subject that GitHub's real OIDC token will never present, which surfaces later as an opaque \"Not authorized to perform sts:AssumeRoleWithWebIdentity\" in CI instead of failing here at plan time."
+  description = "Your actual GitHub org or username that owns this repo. This feeds the cicd_role module's OIDC trust condition for the production environment."
   type        = string
 }
 
@@ -47,4 +47,16 @@ variable "vpc_cidr" {
 variable "shared_account_id" {
   description = "AWS account ID of the shared environment, which owns the shared ECR repo prod pulls the deployed image from"
   type        = string
+}
+
+variable "create_oidc_provider" {
+  description = "Whether this environment should create its own GitHub OIDC provider. Set to false to reuse an existing provider ARN from another module or account."
+  type        = bool
+  default     = true
+}
+
+variable "existing_oidc_provider_arn" {
+  description = "ARN of the existing GitHub Actions OIDC provider to reuse in this AWS account. Set this when create_oidc_provider is false."
+  type        = string
+  default     = null
 }

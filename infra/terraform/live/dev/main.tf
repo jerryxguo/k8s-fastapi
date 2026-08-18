@@ -42,13 +42,14 @@ module "eks" {
 module "cicd_role" {
   source = "../../modules/github-oidc-cicd-role"
 
-  name_prefix          = var.name_prefix
-  github_org           = var.github_org
-  github_repo          = var.github_repo
-  github_environment   = "development"
-  grant_ecr_push       = false # dev only deploys; "shared" owns push access
-  create_oidc_provider = true # only true in exactly one environment per AWS account
-  tags                 = local.tags
+  name_prefix                 = var.name_prefix
+  github_org                  = var.github_org
+  github_repo                 = var.github_repo
+  github_environment          = "development"
+  grant_ecr_push              = false # dev only deploys; "shared" owns push access
+  create_oidc_provider       = var.create_oidc_provider
+  existing_oidc_provider_arn = var.existing_oidc_provider_arn
+  tags                       = local.tags
 }
 
 # Example Secrets Manager secret the app would read via the External Secrets

@@ -49,3 +49,15 @@ variable "shared_account_id" {
   description = "AWS account ID of the shared environment, which owns the shared ECR repo dev pulls the deployed image from"
   type        = string
 }
+
+variable "create_oidc_provider" {
+  description = "Whether this environment should create its own GitHub OIDC provider. Set to false to reuse an existing provider ARN from another module or account."
+  type        = bool
+  default     = false
+}
+
+variable "existing_oidc_provider_arn" {
+  description = "ARN of the existing GitHub Actions OIDC provider to reuse in this AWS account. Set this when create_oidc_provider is false."
+  type        = string
+  default     = "arn:aws:iam::621508399429:oidc-provider/token.actions.githubusercontent.com"
+}
