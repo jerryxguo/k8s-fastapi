@@ -47,6 +47,18 @@ variable "existing_oidc_provider_arn" {
   default = null
 }
 
+variable "github_owner_id" {
+  description = "Immutable numeric ID of the GitHub org/user that owns this repo. GitHub started issuing OIDC tokens with immutable subject claims (repo:org@ownerID/repo@repoID:...) by default for repositories created after 2026-07-15 (and this can be opted into for older repos too) -- see docs.github.com/actions/reference/openid-connect-reference. Set this (and github_repository_id) to match whatever your actual token issues, or the trust policy's sub condition will never match and AssumeRoleWithWebIdentity fails with a generic 'Not authorized' error that gives no hint this is the cause. Find via: gh api repos/<owner>/<repo> --jq '.owner.id'. Leave null to use the legacy plain-name subject format."
+  type        = string
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "Immutable numeric ID of this GitHub repository. See github_owner_id for why this matters. Find via: gh api repos/<owner>/<repo> --jq '.id'."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

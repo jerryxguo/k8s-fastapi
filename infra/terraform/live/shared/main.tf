@@ -21,12 +21,14 @@ module "ecr" {
 module "cicd_role" {
   source = "../../modules/github-oidc-cicd-role"
 
-  name_prefix          = var.name_prefix
-  github_org           = var.github_org
-  github_repo          = var.github_repo
-  github_environment   = "shared"
-  ecr_repository_arn   = module.ecr.repository_arn
-  grant_ecr_push       = true # the one environment that builds + pushes the image
-  create_oidc_provider = true # only true in exactly one environment per AWS account
-  tags                 = local.tags
+  name_prefix           = var.name_prefix
+  github_org            = var.github_org
+  github_repo           = var.github_repo
+  github_owner_id       = var.github_owner_id
+  github_repository_id  = var.github_repository_id
+  github_environment    = "shared"
+  ecr_repository_arn    = module.ecr.repository_arn
+  grant_ecr_push        = true # the one environment that builds + pushes the image
+  create_oidc_provider  = true # only true in exactly one environment per AWS account
+  tags                  = local.tags
 }

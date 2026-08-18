@@ -9,5 +9,9 @@ terraform {
     region         = "ap-southeast-2"
     use_lockfile   = true
     encrypt        = true
+    # Backend blocks can't reference variables (resolved before any var is
+    # evaluated), so this has to be a literal, hardcoded to match this
+    # environment's provider profile ("shared-full") rather than var.profile.
+    profile        = "shared-full"
   }
 }
