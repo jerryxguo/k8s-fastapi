@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and fill in.
+admin_principal_arn = "arn:aws:iam::621508399429:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_617bbab2b31bdde8"
+shared_account_id   = "621508399429"
+github_org = "jerryxguo"

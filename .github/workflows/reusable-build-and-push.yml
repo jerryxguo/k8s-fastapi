@@ -1,0 +1,61 @@
+name: reusable-build-and-push
+
+# Builds the Docker image via Pants (`pants package src/app:docker`) and
+# pushes it to the shared ECR repo owned by the dedicated "shared" AWS
+# account (see infra/terraform/live/shared). Assumes that account's CI/CD
+# IAM role directly via GitHub OIDC (`aws-actions/configure-aws-credentials`)
+# -- no role-chaining and no external repo's reusable workflow; everything
+# this job needs lives in this repository.
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: "Generated build version, e.g. v2026-08-15.123456789"
+        value: ${{ jobs.build.outputs.version }}
+      image:
+        description: "Full image ref that was pushed"
+        value: ${{ jobs.build.outputs.image }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: shared # the "shared" account owns the ECR repo -- see infra/terraform/live/shared
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bootstrap-pants
+
+      - id: version
+        uses: ./.github/actions/generate-build-version
+
+      - name: Build image (pants package src/app:docker)
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: pants package src/app:docker
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr-login
+
+      - name: Tag and push image
+        id: image
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          LOCAL_IMAGE="k8s-demo-shared/service-api:${BUILD_VERSION}"
+          docker tag "$LOCAL_IMAGE" "${{ vars.ECR_REPOSITORY }}:${BUILD_VERSION}"
+          docker tag "$LOCAL_IMAGE" "${{ vars.ECR_REPOSITORY }}:latest"
+          docker push "${{ vars.ECR_REPOSITORY }}:${BUILD_VERSION}"
+          docker push "${{ vars.ECR_REPOSITORY }}:latest"
+          echo "image=${{ vars.ECR_REPOSITORY }}:${BUILD_VERSION}" >> "$GITHUB_OUTPUT"

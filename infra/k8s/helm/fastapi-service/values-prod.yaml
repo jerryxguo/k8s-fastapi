@@ -1,0 +1,26 @@
+namespace: k8s-demo
+
+replicaCount: 3
+
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 8
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+env:
+  APP_ENV: "production"
+  APP_NAME_PREFIX: "k8s-demo-prod"
+
+externalSecret:
+  secretsManagerName: "k8s-demo-prod/app-config"
+
+ingress:
+  scheme: internal
+  host: "k8s-demo.apis.example.com"

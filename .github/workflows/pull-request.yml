@@ -1,0 +1,52 @@
+name: pull-request
+
+# code-check + unit-test in parallel, then build, then deploy to
+# development, then a post-deploy smoke test -- on every PR, so a reviewer
+# can see the change actually running before merge.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  code-check:
+    uses: ./.github/workflows/reusable-code-checks.yml
+
+  unit-test:
+    uses: ./.github/workflows/reusable-unit-test.yml
+
+  build:
+    needs: [code-check, unit-test]
+    uses: ./.github/workflows/reusable-build-and-push.yml
+    # Required even for a same-repo reusable workflow: declaring
+    # `environment:` in the CALLED workflow's job is not, by itself, enough
+    # for `${{ secrets.AWS_ROLE_ARN }}` to resolve there -- without
+    # `secrets: inherit` here, every environment-scoped secret resolves to
+    # "" at the called workflow's runtime (see github/docs#44458), which is
+    # exactly what produced "Credentials could not be loaded" even after the
+    # secret was added to the environment.
+    secrets: inherit
+
+  deploy-development:
+    needs: build
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: development
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit
+
+  smoke-test-development:
+    needs: deploy-development
+    uses: ./.github/workflows/reusable-smoke-test.yml
+    with:
+      environment: development
+    secrets: inherit

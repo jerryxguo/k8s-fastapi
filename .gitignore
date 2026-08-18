@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
+dist/
+*.egg-info/
+
+# Pants
+.pants.d/
+.pids/
+pants.log
+
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+!infra/terraform/**/.terraform.lock.hcl

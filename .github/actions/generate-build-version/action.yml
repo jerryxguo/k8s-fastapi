@@ -1,0 +1,19 @@
+name: generate-build-version
+description: >-
+  Generate a CalVer build version and expose it as an output
+  (v<UTC-date>.<run-id>), inlined as a shell step so this project has no
+  external-repo CI/CD dependency.
+outputs:
+  version:
+    description: "e.g. v2026-08-15.123456789"
+    value: ${{ steps.version.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: |
+        DATE="$(date -u +%Y-%m-%d)"
+        VERSION="v${DATE}.${GITHUB_RUN_ID}"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "Generated build version: ${VERSION}"

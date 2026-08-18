@@ -1,0 +1,98 @@
+[GLOBAL]
+pants_version = "2.30.0"
+backend_packages = [
+  # Python
+  "pants.backend.python",
+  "pants.backend.python.lint.black",
+  "pants.backend.python.lint.isort",
+  "pants.backend.python.lint.flake8",
+  "pants.backend.python.typecheck.mypy",
+  "pants.backend.experimental.python",  # enables `pants publish`, unused today but cheap to keep on
+  # Docker
+  "pants.backend.docker",
+  "pants.backend.docker.lint.hadolint",
+  # BUILD file formatting/generation
+  "pants.backend.build_files.fmt.black",
+]
+
+[anonymous-telemetry]
+enabled = false
+
+[environments-preview.names]
+# See the root BUILD file for what these actually do -- local_linux is what
+# every pex_binary/docker_image target uses by default (via __defaults__),
+# falling back to cross_build (a real linux/x86_64 Docker environment) only
+# on machines that aren't already linux/x86_64, e.g. an Apple Silicon Mac.
+local_linux = "//:local_linux"
+local_macos = "//:local_macos"
+cross_build = "//:cross_build"
+
+[source]
+# "tests" sits as its own top-level directory (a sibling of src/, not
+# nested under it -- see the repo layout in README.md), so it needs its own
+# entry here. Without it, Pants has no source root for anything under
+# tests/ and `pants test ::` fails with NoSourceRootError even though
+# tests/BUILD itself is set up correctly.
+root_patterns = ["src", "tests"]
+
+[python.resolves]
+# A single resolve for everything (app + test + lint/typecheck tooling) --
+# this project has no non-app Python scripts or other second dependency set
+# that would need its own resolve, so one is enough. Add another only if a
+# genuinely incompatible dependency set shows up later.
+k8s_python_default = "src/requirements.lock"
+
+[python]
+enable_resolves = true
+interpreter_constraints = ["CPython>=3.11,<3.12"]
+# Without this, any python_sources()/python_tests() target that doesn't set
+# resolve= explicitly falls back to Pants's own hardcoded literal default
+# resolve name ("python-default"), which doesn't exist in this project --
+# only k8s_python_default does -- and lint/test blow up with
+# UnrecognizedResolveNamesError. src/BUILD and src/app/BUILD dodge this by
+# setting resolve="k8s_python_default" explicitly, but newer directories
+# (routers, routers/v1, schemas, service) just call python_sources() with
+# no resolve=, which is exactly what this default is for: one resolve for
+# the whole project (see the comment on [python.resolves] above), so no
+# BUILD file should ever need to state it individually.
+default_resolve = "k8s_python_default"
+
+[export]
+resolve = "k8s_python_default"
+
+[test]
+use_coverage = true
+extra_env_vars = [
+  "APP_SERVICE_NAME=k8s-demo-service",
+  "APP_NAME_PREFIX=k8s-demo-test",
+  "APP_ENV=local",
+  "APP_REGION=ap-southeast-2",
+]
+
+[coverage-py]
+interpreter_constraints = [">=3.11"]
+report = ["html", "xml", "console"]
+fail_under = 85
+
+[pytest]
+args = []
+
+[generate-lockfiles]
+diff = true
+
+[docker]
+# Passes the host/CI `BUILD_VERSION` env var through to `docker build` so
+# `docker_image.image_tags` below can reference it as `{build_args.BUILD_VERSION}`.
+build_args = ["BUILD_VERSION"]
+# Pants runs `docker build` in its own sandboxed subprocess, which doesn't
+# inherit your interactive shell's full PATH -- on macOS with Docker
+# Desktop, that means the sandboxed process can't find
+# `docker-credential-desktop` (referenced by `~/.docker/config.json`'s
+# `credsStore`) even though it resolves fine in a normal terminal, causing
+# `error getting credentials - err: exec: "docker-credential-desktop":
+# executable file not found in $PATH`. Passing PATH through fixes it.
+env_vars = ["PATH"]
+
+[mypy]
+config = "pyproject.toml"
+install_from_resolve = "k8s_python_default"  # needed so the pydantic mypy plugin is importable

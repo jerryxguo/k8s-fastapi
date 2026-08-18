@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "k8s-demo-service"
+version = "0.1.0"
+description = "Example FastAPI service demonstrating an AWS EKS deployment pattern"
+requires-python = ">=3.11,<3.12"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+# No `--cov` here: coverage measurement is Pants' job (`[coverage-py]` in
+# pants.toml), not pytest-cov's -- running both would double-instrument and
+# produce conflicting reports. `pythonpath`/`testpaths` are kept purely as a
+# convenience for IDEs and a bare `pytest` invoked outside Pants; Pants
+# itself lays out each test's sandbox so it doesn't need either.
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/__init__.py", "*/test_*.py", "*/conftest.py"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+ignore_missing_imports = true
+plugins = "pydantic.mypy"

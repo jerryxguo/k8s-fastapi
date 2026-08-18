@@ -1,0 +1,8 @@
+{{ include "fastapi-service.fullname" . }} deployed to namespace {{ .Values.namespace }}.
+
+Check rollout status:
+  kubectl -n {{ .Values.namespace }} rollout status deploy/{{ include "fastapi-service.fullname" . }}
+
+Health check (from inside the cluster, or via the Ingress host once DNS/ACM are wired up):
+  kubectl -n {{ .Values.namespace }} port-forward svc/{{ include "fastapi-service.fullname" . }} 8080:80
+  curl localhost:8080/healthcheck

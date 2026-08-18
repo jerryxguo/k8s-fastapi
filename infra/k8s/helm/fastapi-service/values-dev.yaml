@@ -1,0 +1,18 @@
+namespace: k8s-demo
+
+replicaCount: 1
+
+autoscaling:
+  minReplicas: 1
+  maxReplicas: 3
+
+env:
+  APP_ENV: "development"
+  APP_NAME_PREFIX: "k8s-demo-dev"
+
+externalSecret:
+  secretsManagerName: "k8s-demo-dev/app-config"
+
+ingress:
+  scheme: internal
+  host: "k8s-demo.dev.internal.example.com"

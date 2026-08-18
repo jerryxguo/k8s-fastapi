@@ -1,0 +1,71 @@
+name: release
+
+# On every merge to main: build once and promote the SAME image through
+# development -> production in order, smoke-testing after each deploy so a
+# failed environment blocks the next one.
+#
+# Manual approval before production is configured on the "production" GitHub
+# Environment in repo Settings -> Environments (a required reviewer), not in
+# this YAML -- each `environment: <env>` job is gated by that environment's
+# protection rules rather than anything in the workflow file itself.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  code-check:
+    uses: ./.github/workflows/reusable-code-checks.yml
+
+  unit-test:
+    uses: ./.github/workflows/reusable-unit-test.yml
+
+  build:
+    needs: [code-check, unit-test]
+    uses: ./.github/workflows/reusable-build-and-push.yml
+    # Required even for a same-repo reusable workflow: declaring
+    # `environment:` in the CALLED workflow's job is not, by itself, enough
+    # for `${{ secrets.AWS_ROLE_ARN }}` to resolve there -- without
+    # `secrets: inherit` here, every environment-scoped secret resolves to
+    # "" at the called workflow's runtime (see github/docs#44458), which is
+    # exactly what produced "Credentials could not be loaded" even after the
+    # secret was added to the environment.
+    secrets: inherit
+
+  deploy-development:
+    needs: build
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: development
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit
+
+  smoke-test-development:
+    needs: deploy-development
+    uses: ./.github/workflows/reusable-smoke-test.yml
+    with:
+      environment: development
+    secrets: inherit
+
+  deploy-production:
+    needs: [build, smoke-test-development]
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: production
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit
+
+  smoke-test-production:
+    needs: deploy-production
+    uses: ./.github/workflows/reusable-smoke-test.yml
+    with:
+      environment: production
+    secrets: inherit

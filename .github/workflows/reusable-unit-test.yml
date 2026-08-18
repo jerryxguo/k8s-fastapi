@@ -1,0 +1,21 @@
+name: reusable-unit-test
+
+on:
+  workflow_call: {}
+
+jobs:
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bootstrap-pants
+      - name: Test
+        run: |
+          pants test ::
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: dist/coverage/python
+          retention-days: 2
