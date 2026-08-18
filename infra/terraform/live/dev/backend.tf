@@ -9,5 +9,6 @@ terraform {
     region         = "ap-southeast-2"
     use_lockfile   = true
     encrypt        = true
+    profile        = "dev-full"
   }
 }

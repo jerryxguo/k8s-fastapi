@@ -45,6 +45,8 @@ module "cicd_role" {
   name_prefix                 = var.name_prefix
   github_org                  = var.github_org
   github_repo                 = var.github_repo
+  github_owner_id             = var.github_owner_id
+  github_repository_id        = var.github_repository_id
   github_environment          = "development"
   grant_ecr_push              = false # dev only deploys; "shared" owns push access
   create_oidc_provider       = var.create_oidc_provider

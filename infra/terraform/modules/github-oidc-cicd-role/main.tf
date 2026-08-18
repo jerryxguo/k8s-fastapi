@@ -19,14 +19,31 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 
 locals {
   oidc_provider_arn = var.create_oidc_provider ? aws_iam_openid_connect_provider.github_actions[0].arn : var.existing_oidc_provider_arn
-  # e.g. "repo:your-org/K8s:environment:production"
-  oidc_sub = var.github_environment != null ? "repo:${var.github_org}/${var.github_repo}:environment:${var.github_environment}" : "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_ref_branch}"
+
+  # GitHub now issues OIDC tokens with immutable subject claims by default
+  # for repos created after 2026-07-15 (owner/repo numeric IDs baked in
+  # alongside the names, e.g. "org@123456/repo@789012") -- see
+  # docs.github.com/actions/reference/openid-connect-reference. When
+  # github_owner_id/github_repository_id are set, build the sub condition
+  # to match that real format; otherwise fall back to the legacy
+  # plain-name format for repos that still use it.
+  github_org_claim  = var.github_owner_id != null ? "${var.github_org}@${var.github_owner_id}" : var.github_org
+  github_repo_claim = var.github_repository_id != null ? "${var.github_repo}@${var.github_repository_id}" : var.github_repo
+
+  # e.g. "repo:your-org@123456/K8s@789012:environment:production"
+  oidc_sub = var.github_environment != null ? "repo:${local.github_org_claim}/${local.github_repo_claim}:environment:${var.github_environment}" : "repo:${local.github_org_claim}/${local.github_repo_claim}:ref:refs/heads/${var.github_ref_branch}"
 }
 
 data "aws_iam_policy_document" "trust" {
   statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect = "Allow"
+    # TagSession is required alongside AssumeRoleWithWebIdentity because
+    # aws-actions/configure-aws-credentials@v4 attaches GitHub context
+    # (repo, ref, sha, workflow, etc.) as role session tags by default.
+    # Without this, STS rejects the whole assume-role call with
+    # "Not authorized to perform sts:AssumeRoleWithWebIdentity" even
+    # though the sub/aud conditions below match correctly.
+    actions = ["sts:AssumeRoleWithWebIdentity", "sts:TagSession"]
 
     principals {
       type        = "Federated"
