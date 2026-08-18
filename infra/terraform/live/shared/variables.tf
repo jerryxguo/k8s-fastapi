@@ -38,3 +38,17 @@ variable "prod_account_id" {
   description = "AWS account ID of the production environment, granted cross-account ECR pull"
   type        = string
 }
+
+# GitHub now issues OIDC tokens with immutable subject claims (owner/repo
+# numeric IDs baked in) by default for repos created after 2026-07-15 --
+# see modules/github-oidc-cicd-role/variables.tf for why this matters.
+# Find current values via: gh api repos/<owner>/<repo> --jq '.owner.id,.id'
+variable "github_owner_id" {
+  type    = string
+  default = "10950337"
+}
+
+variable "github_repository_id" {
+  type    = string
+  default = "1337888631"
+}
