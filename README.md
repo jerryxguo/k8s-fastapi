@@ -112,7 +112,7 @@ trusts. For each, set:
 
 | Name | Type | Value |
 |---|---|---|
-| `AWS_ROLE_ARN` | secret | that environment's `cicd_role_arn` Terraform output |
+| `AWS_ROLE_ARN` | variable | that environment's `cicd_role_arn` Terraform output |
 | `AWS_REGION` | variable | e.g. `ap-southeast-2` |
 | `EKS_CLUSTER_NAME` | variable | that environment's `cluster_name` Terraform output -- **not applicable to `shared`**, which has no EKS cluster |
 | `APP_IRSA_ROLE_ARN` | variable | that environment's `app_irsa_role_arn` Terraform output -- **not applicable to `shared`** |
