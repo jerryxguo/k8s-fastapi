@@ -34,9 +34,9 @@ variable "github_org" {
 }
 
 variable "github_repo" {
-  description = "Repo name as it appears in the GitHub URL (github.com/<org>/<repo>) -- only change this if the repo isn't actually named \"K8s\"."
+  description = "Repo name as it appears in the GitHub URL (github.com/<org>/<repo>)."
   type        = string
-  default     = "K8s"
+  default     = "k8s-fastapi"
 }
 
 variable "vpc_cidr" {
