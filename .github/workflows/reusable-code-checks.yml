@@ -1,0 +1,17 @@
+name: reusable-code-checks
+
+on:
+  workflow_call: {}
+
+jobs:
+  code-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bootstrap-pants
+      - name: Check BUILD files are up to date
+        run: |
+          pants tailor --check update-build-files --check ::
+      - name: Lint and typecheck
+        run: |
+          pants lint check ::

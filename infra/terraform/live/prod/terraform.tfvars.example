@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and fill in (production AWS account).
+admin_principal_arn = "arn:aws:iam::621508399429:user/jerry_xguo"
+shared_account_id   = "621508399429"
+github_org = "jerryxguo"

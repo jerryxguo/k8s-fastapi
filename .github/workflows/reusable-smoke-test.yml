@@ -1,0 +1,38 @@
+name: reusable-smoke-test
+
+# A minimal post-deploy smoke test. Rather than reaching the Ingress from
+# outside the cluster (which would need a runner with network access to the
+# internal ALB), this runs the check *inside* the cluster via `kubectl run`,
+# hitting the ClusterIP Service directly -- simpler, no extra infra, and
+# just as meaningful a smoke test for a healthcheck-only example endpoint.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "${{ vars.EKS_CLUSTER_NAME }}" --region "${{ vars.AWS_REGION }}"
+
+      - name: Curl /healthcheck from inside the cluster
+        run: |
+          NS="${{ vars.APP_NAMESPACE || 'k8s-demo' }}"
+          kubectl -n "$NS" run smoke-test-"${GITHUB_RUN_ID}" \
+            --rm -i --restart=Never --image=curlimages/curl:8.10.1 -- \
+            curl -sf --max-time 10 http://k8s-demo-service."$NS".svc.cluster.local/healthcheck

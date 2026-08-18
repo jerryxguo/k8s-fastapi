@@ -1,0 +1,15 @@
+name: bootstrap-pants
+description: >-
+  Install the Pants launcher and prime its GitHub Actions caches. Every job
+  that runs a `pants ...` command should start with this action.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - uses: pantsbuild/actions/init-pants@v8
+      with:
+        gha-cache-key: v0
+        named-caches-hash: ${{ hashFiles('src/requirements.lock') }}
+        cache-lmdb-store: "true"

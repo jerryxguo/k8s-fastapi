@@ -1,0 +1,8 @@
+apiVersion: v2
+name: fastapi-service
+description: >-
+  Example FastAPI service chart for AWS EKS: a Deployment + Service +
+  Ingress + HorizontalPodAutoscaler for a single service.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

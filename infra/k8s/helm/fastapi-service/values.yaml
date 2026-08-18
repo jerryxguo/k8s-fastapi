@@ -1,0 +1,75 @@
+# Default values -- overridden per environment by values-{dev,prod}.yaml
+nameOverride: ""
+namespace: k8s-demo
+
+image:
+  repository: ""      # set per env: <account>.dkr.ecr.<region>.amazonaws.com/k8s-demo-shared/service-api
+  tag: ""              # set by CI to the build version at deploy time
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+containerPort: 8080
+
+serviceAccount:
+  create: true
+  name: k8s-demo-service
+  # Set per environment to the app_irsa_role_arn Terraform output.
+  roleArn: ""
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+healthCheck:
+  path: /healthcheck
+  # Matches gunicorn_conf.py's ALB-idle-timeout-plus-one reasoning: probes
+  # must tolerate normal request latency without flapping the pod ready state.
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+env:
+  APP_ENV: "development"
+  APP_REGION: "ap-southeast-2"
+  APP_SERVICE_NAME: "k8s-demo-service"
+  APP_NAME_PREFIX: "k8s-demo-dev"
+  APP_LOG_LEVEL: "INFO"
+
+# Populated via External Secrets Operator from the Secrets Manager secret
+# Terraform creates (${name_prefix}/app-config). Leave enabled true even if
+# the secret is currently empty -- the app tolerates missing keys via
+# plain pydantic defaults.
+externalSecret:
+  enabled: true
+  secretsManagerName: "" # set per env, e.g. k8s-demo-dev/app-config
+  refreshInterval: 1h
+
+ingress:
+  enabled: true
+  className: alb
+  # Internal ALB by default -- flip to internet-facing only for
+  # environments that should be public.
+  scheme: internal
+  host: ""
+  healthCheckPath: /healthcheck
+
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector:
+  role: app
+
+tolerations: []
+affinity: {}
