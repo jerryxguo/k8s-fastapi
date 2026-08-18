@@ -7,7 +7,7 @@ terraform {
     bucket         = "k8s-demo-tfstate-621508399429"
     key            = "k8s-demo-service/shared/terraform.tfstate"
     region         = "ap-southeast-2"
-    dynamodb_table = "terraform-locks"
+    use_lockfile   = true
     encrypt        = true
   }
 }
