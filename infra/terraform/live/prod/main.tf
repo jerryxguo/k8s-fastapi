@@ -47,13 +47,14 @@ module "eks" {
 module "cicd_role" {
   source = "../../modules/github-oidc-cicd-role"
 
-  name_prefix          = var.name_prefix
-  github_org           = var.github_org
-  github_repo          = var.github_repo
-  github_environment   = "production"
-  grant_ecr_push       = false # prod only deploys; "shared" owns push access
-  create_oidc_provider = true
-  tags                 = local.tags
+  name_prefix                 = var.name_prefix
+  github_org                  = var.github_org
+  github_repo                 = var.github_repo
+  github_environment          = "production"
+  grant_ecr_push              = false # prod only deploys; "shared" owns push access
+  create_oidc_provider       = var.create_oidc_provider
+  existing_oidc_provider_arn = var.existing_oidc_provider_arn
+  tags                       = local.tags
 }
 
 resource "aws_secretsmanager_secret" "app" {
