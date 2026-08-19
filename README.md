@@ -67,15 +67,24 @@ curl -X POST localhost:8080/v1/items -H 'content-type: application/json' -d '{"n
 curl localhost:8080/v1/items
 ```
 
+## Setting up from scratch
+
+`docs/SETUP.md` is the ordered runbook: prerequisites, state buckets, tfvars,
+apply order, GitHub Environments and their variables, protection rules, and
+the first deploy. The two sections below are the short version.
+
 ## Deploying the infrastructure
 
-Each environment is a separate AWS account: one account per environment,
-one CI/CD IAM role per environment. Per environment:
+Each environment gets its own state and its own CI/CD IAM role.
 
 ```bash
 cd infra/terraform/live/dev   # or prod / shared
 cp terraform.tfvars.example terraform.tfvars   # fill in real values
-terraform init      # after uncommenting the S3 backend in backend.tf
+# The S3 state bucket for this environment's ACCOUNT must already exist --
+# Terraform cannot create the backend it is told to use. There is one
+# bucket per account, named k8s-demo-tfstate-<account-id>
+# infra/terraform/live/prod/backend.tf for the bootstrap commands.
+terraform init      # requires Terraform >= 1.10 (backend.tf uses use_lockfile)
 terraform plan
 terraform apply
 ```
@@ -86,23 +95,21 @@ environment pulls the same image from (see "ECR strategy" in
 `dev` and `prod`, passing the shared account's ID into each one's
 `shared_account_id` tfvar.
 
-Terraform CLI, AWS provider, and the `terraform-aws-modules` registry
-modules could not be exercised in the sandbox this project was built in (no
-network egress to `releases.hashicorp.com`/the module registry) -- every
-`.tf` file was checked for syntax validity with `python-hcl2`, but you
-should run `terraform init && terraform validate` (and ideally `plan`)
-yourself before the first real `apply`. Same caveat for `helm lint` (no
-`helm` binary in that sandbox either) -- templates were hand-reviewed and
-brace/block-balance-checked instead; see `make helm-lint` once you have the
-CLI. The Pants launcher itself (`static.pantsbuild.org`) was equally
-unreachable from that sandbox, so `pants` was never actually run either --
-every `pants.toml`/`BUILD` file was checked for valid syntax instead. Run
-`make lock && make test && make lint && make build` yourself the first time
-you clone this repo, before trusting CI to be green.
+`terraform init -backend=false && terraform validate` has since been run
+against all three roots (`dev`, `prod`, `shared`) and passes. `terraform
+plan`/`apply` have still never been run, so anything that only surfaces
+against real AWS state or a real account remains unverified -- run `plan`
+yourself before the first `apply`. `make helm-lint`, `make test` and `make lint` also pass. The one step never
+exercised is `make build`, which resolves and packages for `linux/x86_64` --
+run it once before trusting CI. See `docs/DESIGN-NOTES.md`'s "Validation
+caveat".
 
-After `apply`, install the two cluster-wide add-ons this project's Helm
-chart assumes exist (AWS Load Balancer Controller, External Secrets
-Operator) -- see `infra/k8s/README.md`.
+There is no post-apply step. Terraform installs the two cluster-wide
+add-ons the app chart depends on (AWS Load Balancer Controller, External
+Secrets Operator), creates the app namespace, and installs the
+`ClusterSecretStore` -- all in the same `apply`. See `infra/k8s/README.md`
+for what those resources are and why the store is a `helm_release` rather
+than a `kubernetes_manifest`.
 
 ## Wiring up GitHub
 
@@ -118,6 +125,7 @@ trusts. For each, set:
 | `APP_IRSA_ROLE_ARN` | variable | that environment's `app_irsa_role_arn` Terraform output -- **not applicable to `shared`** |
 | `ENVIRONMENT_SHORT` | variable | `dev` / `prod` (selects `values-<env>.yaml`) -- **not applicable to `shared`** |
 | `ECR_REPOSITORY` | variable | **`shared` only** -- the `ecr_repository_url` output, e.g. `<shared-account>.dkr.ecr.ap-southeast-2.amazonaws.com/k8s-demo-shared/service-api` |
+| `APP_CERTIFICATE_ARN` | variable | **Optional.** ACM certificate ARN covering that environment's `ingress.host`. Leave unset and the ALB serves plain HTTP on :80; set it and the same chart renders HTTPS with an HTTP->HTTPS redirect, no code change. Nothing in this repo issues the certificate -- it needs a real domain you control. |
 
 Add a required reviewer on the `production` Environment's protection rules
 for a manual approval gate before production deploys -- that's where the
@@ -126,12 +134,50 @@ workflow YAML).
 
 ## CI/CD
 
-- **`pull-request.yml`** -- on every PR: lint + test, build + push (to the
-  ECR repo owned by the `shared` account), deploy to `development`,
-  smoke-test.
-- **`release.yml`** -- on every merge to `main`: build once, then promote
-  the identical image through `development → production`, smoke-testing
-  after each deploy.
+- **`pull-request.yml`** -- on every PR: lint + test + infra-check in
+  parallel, then build + push (to the ECR repo owned by the `shared`
+  account), deploy to `development`, smoke-test.
+- **`release.yml`** -- on every merge to `main`: the same checks, then build
+  once and promote the identical image through `development → production`,
+  smoke-testing after each deploy.
+- **`reusable-infra-checks.yml`** -- `terraform fmt -check`, `terraform
+  validate` against every `live/<env>` root, `helm lint`, and `helm
+  template` for both value sets plus the TLS branch. Needs no AWS
+  credentials. The build job depends on it, so infrastructure that doesn't
+  validate can't produce an image.
+- Deploys to a given environment are serialised by a `deploy-<environment>`
+  concurrency group, so two open PRs can't both `helm upgrade` the same
+  release and leave the smoke test reporting on someone else's image.
+- Third-party actions are pinned to commit SHAs, not floating tags.
+
+- **`manual-deploy-development.yml`** -- deploy any branch to `development`
+  on demand. See below.
 
 Full detail on why each of these looks the way it does is in
 `docs/DESIGN-NOTES.md`.
+
+## Deploying a branch to development by hand
+
+Actions tab -> **manual-deploy-development** -> **Run workflow** -> pick the
+branch under "Use workflow from" -> Run. It builds that branch and deploys it
+to `development`, then smoke-tests. Tick `skip_checks` to skip lint/test/infra
+checks for faster iteration.
+
+Three things worth knowing:
+
+- **The workflow file has to be on the default branch** for it to appear in
+  that menu at all. Once it is, the run itself uses the workflow and code from
+  whichever branch you select.
+- **The `development` Environment must allow the branch.** If its
+  "Deployment branches and tags" rule is set to protected branches only, a
+  feature-branch run fails at the deploy job. Set it to "All branches" (or a
+  pattern) for this to be usable. No IAM change is needed: the dev role's OIDC
+  trust matches `...:environment:development`, not a branch ref, so any branch
+  can assume it.
+- **A manual run queues rather than races.** It shares the
+  `deploy-development` concurrency group with the PR and release pipelines, so
+  it waits for an in-flight deploy instead of fighting it for the same Helm
+  release.
+
+If the `shared` Environment has a required reviewer, the build job pauses for
+approval, since that is the account that owns the ECR repo.

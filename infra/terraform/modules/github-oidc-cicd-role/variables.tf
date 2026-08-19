@@ -2,18 +2,22 @@ variable "name_prefix" {
   type = string
 }
 
+# No defaults, deliberately. These build the OIDC trust policy's `sub`
+# condition; a placeholder value applies cleanly and only fails later in CI
+# with a generic "Not authorized" that names no field. Required turns that
+# into a plan-time "Missing required argument".
 variable "github_org" {
-  type    = string
-  default = "your-org"
+  description = "GitHub owner that owns this repo -- an organization name, or your username for a personal account. The OIDC subject format is identical either way."
+  type        = string
 }
 
 variable "github_repo" {
-  type    = string
-  default = "K8s"
+  description = "Repo name as it appears in the GitHub URL (github.com/<owner>/<repo>)."
+  type        = string
 }
 
 variable "github_environment" {
-  description = "GitHub Environment name this role trusts (e.g. development/production). Set to null and use github_ref_branch instead for branch-scoped trust."
+  description = "GitHub Environment name this role trusts (e.g. development/production)."
   type        = string
   default     = null
 }

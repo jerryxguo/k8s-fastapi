@@ -22,7 +22,7 @@ variable "admin_principal_arn" {
 }
 
 variable "cicd_role_arn" {
-  description = "IAM role ARN used by the GitHub Actions deploy job; granted namespace-edit access so it can helm/kubectl apply. Required (no default) -- every caller of this module is expected to have a CI/CD role to pass in. It's fine for this to be an apply-time-unknown value (e.g. a role created in the same apply); see the comment on `access_entries` in main.tf for why that's safe here but wasn't safe when this was gated by an optional/nullable variable."
+  description = "IAM role ARN used by the GitHub Actions deploy job; granted cluster-admin via the access entry in main.tf so it can helm/kubectl apply (see the DECISION comment there for why cluster-admin rather than a narrower policy). Required (no default) -- every caller of this module is expected to have a CI/CD role to pass in. It's fine for this to be an apply-time-unknown value (e.g. a role created in the same apply); see the comment on `access_entries` in main.tf for why that's safe here but wasn't safe when this was gated by an optional/nullable variable."
   type        = string
 }
 

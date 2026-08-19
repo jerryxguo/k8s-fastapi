@@ -19,22 +19,64 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  # One deploy at a time per environment: two open PRs would otherwise both
+  # `helm upgrade` the same release. Queue rather than cancel -- cancelling
+  # mid-upgrade leaves the release in pending-upgrade.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # Before configure-aws-credentials on purpose: an unset AWS_ROLE_ARN
+      # otherwise fails there with a generic "credentials could not be loaded"
+      # that names nothing.
+      - name: Check this Environment is configured
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+          ENVIRONMENT_SHORT: ${{ vars.ENVIRONMENT_SHORT }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${AWS_ROLE_ARN}" ]      || missing="${missing} AWS_ROLE_ARN"
+          [ -n "${AWS_REGION_VAR}" ]    || missing="${missing} AWS_REGION"
+          [ -n "${EKS_CLUSTER_NAME}" ]  || missing="${missing} EKS_CLUSTER_NAME"
+          [ -n "${ENVIRONMENT_SHORT}" ] || missing="${missing} ENVIRONMENT_SHORT"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing variable(s) on the '${TARGET_ENVIRONMENT}' GitHub Environment:${missing}"
+            echo "Set them under Settings -> Environments -> ${TARGET_ENVIRONMENT} -> Environment variables."
+            exit 1
+          fi
+
+          values="infra/k8s/helm/fastapi-service/values-${ENVIRONMENT_SHORT}.yaml"
+          if [ ! -f "${values}" ]; then
+            echo "::error::ENVIRONMENT_SHORT='${ENVIRONMENT_SHORT}' but ${values} does not exist."
+            exit 1
+          fi
+          echo "Deploying with ${values}"
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "${{ vars.EKS_CLUSTER_NAME }}" --region "${{ vars.AWS_REGION }}"
+        # Via env: so a value with shell metacharacters is passed as an
+        # argument rather than evaluated by bash.
+        env:
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+        run: aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION_VAR}"
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v3.16.1
 
@@ -49,6 +91,11 @@ jobs:
           IMAGE_REF: ${{ inputs.image }}
 
       - name: helm upgrade --install
+        # --atomic, not --wait: --wait leaves a failed rollout in place,
+        # --atomic rolls back before returning non-zero.
+        #
+        # APP_CERTIFICATE_ARN is optional -- unset renders plain HTTP, set
+        # renders HTTPS with a redirect, no code change.
         run: |
           helm upgrade --install k8s-demo-service \
             infra/k8s/helm/fastapi-service \
@@ -59,8 +106,8 @@ jobs:
             --set image.tag="${{ steps.image.outputs.tag }}" \
             --set serviceAccount.roleArn="${{ vars.APP_IRSA_ROLE_ARN }}" \
             --set externalSecret.enabled=true \
-            --wait --timeout 5m
+            --set ingress.certificateArn="${{ vars.APP_CERTIFICATE_ARN }}" \
+            --atomic --timeout 5m
 
-      - name: Verify rollout
-        run: |
-          kubectl -n "${{ vars.APP_NAMESPACE || 'k8s-demo' }}" rollout status deploy/k8s-demo-service --timeout=120s
+      # No `kubectl rollout status` step: --atomic already blocks until ready,
+      # so a follow-up check could only ever pass.

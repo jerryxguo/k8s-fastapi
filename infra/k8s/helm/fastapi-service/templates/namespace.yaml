@@ -1,16 +1,24 @@
-# Intentionally not templated here. Namespace create/update is a
-# cluster-scoped action that the CI/CD role's IAM policy deliberately does
-# NOT grant (modules/eks-cluster/main.tf scopes it to
-# AmazonEKSEditPolicy -- edit, not cluster-admin -- specifically so a
-# compromised or misconfigured CI/CD credential can't touch cluster-scoped
-# resources). Managing the Namespace as part of this release would require
-# widening that on every environment just to satisfy one resource. Instead,
-# the namespace is created by Terraform (kubernetes_namespace_v1.app in
-# live/<env>/main.tf, see infra/k8s/README.md), applied as whatever
-# principal is running `terraform apply` -- the same one already granted
-# cluster-admin via the EKS access entry -- before the app is ever deployed.
+# Intentionally not templated here, and `--create-namespace` is deliberately
+# not passed on the CI/CD `helm upgrade --install` command either (see
+# .github/workflows/reusable-deploy.yml) -- not because CI/CD lacks the
+# permission (the "cicd" access entry in modules/eks-cluster/main.tf now
+# uses AmazonEKSClusterAdminPolicy, so it could), but because Terraform is
+# the single source of truth for the namespace's existence
+# (kubernetes_namespace_v1.app in live/<env>/main.tf, see
+# infra/k8s/README.md), applied before the app is ever deployed. Keeping
+# namespace creation out of the Helm release avoids two systems racing to
+# own the same object.
 #
-# `helm upgrade --install --create-namespace` is still safe to keep in the
-# deploy command as a harmless fallback: it only attempts creation if the
-# namespace doesn't already exist, and read-only existence checks are
-# allowed under the edit-scoped role even though create/update are not.
+# HISTORY: this project originally scoped CI/CD to AmazonEKSEditPolicy
+# specifically to stop a compromised credential from touching cluster-scoped
+# resources, which is why this file and the deploy workflow used to explain
+# things in terms of what CI/CD "can't" do. That narrow scope produced
+# repeated one-off RBAC fixes as each new resource type came up (namespace
+# creation, then the ExternalSecret CRD) -- see cicd-gotchas.md in the
+# k8s-fastapi-design skill for the full story, including why extending
+# Kubernetes' native "edit" ClusterRole didn't actually help. CI/CD now runs
+# as cluster-admin instead, a deliberate trade of that isolation for not
+# having to hand-rebuild RBAC grants every time a chart changes. The
+# namespace still isn't templated here or passed via `--create-namespace`,
+# but now purely to keep Terraform as the one place that owns it, not
+# because CI/CD is forbidden from doing it.

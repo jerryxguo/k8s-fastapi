@@ -29,7 +29,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       image: ${{ steps.image.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/bootstrap-pants
 
       - id: version
@@ -40,12 +40,36 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: pants package src/app:docker
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # Before configure-aws-credentials: an unset vars.* renders as an omitted
+      # line in the printed `with:` block, so the action fails with "Input
+      # required and not supplied: aws-region" and nothing points at the
+      # Environment. ECR_REPOSITORY is checked here too -- empty, it makes the
+      # push step run `docker tag ... ":<version>"`.
+      - name: Check this Environment is configured
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${AWS_ROLE_ARN}" ]    || missing="${missing} AWS_ROLE_ARN"
+          [ -n "${AWS_REGION_VAR}" ]  || missing="${missing} AWS_REGION"
+          [ -n "${ECR_REPOSITORY}" ]  || missing="${missing} ECR_REPOSITORY"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing variable(s) on the 'shared' GitHub Environment:${missing}"
+            echo "Set them as Environment *variables* (not secrets) under"
+            echo "Settings -> Environments -> shared. Values come from"
+            echo "'terraform output' in infra/terraform/live/shared."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
         id: ecr-login
 
       - name: Tag and push image

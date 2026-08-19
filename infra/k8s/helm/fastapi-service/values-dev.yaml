@@ -16,3 +16,6 @@ externalSecret:
 ingress:
   scheme: internal
   host: "k8s-demo.dev.internal.example.com"
+  # Set to the ACM certificate ARN covering the host above to switch
+  # this environment from HTTP to HTTPS (with an HTTP->HTTPS redirect).
+  # certificateArn: "arn:aws:acm:ap-southeast-2:<account>:certificate/<id>"

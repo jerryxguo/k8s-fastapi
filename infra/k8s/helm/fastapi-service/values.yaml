@@ -11,6 +11,13 @@ replicaCount: 2
 
 containerPort: 8080
 
+# Consumed in sequence on shutdown: preStop pause, then gunicorn's
+# graceful_timeout (30s). Grace period must exceed their sum.
+terminationGracePeriodSeconds: 45
+preStopSleepSeconds: 5 # 0 disables the hook
+
+revisionHistoryLimit: 3
+
 serviceAccount:
   create: true
   name: k8s-demo-service
@@ -33,8 +40,8 @@ autoscaling:
 
 healthCheck:
   path: /healthcheck
-  # Matches gunicorn_conf.py's ALB-idle-timeout-plus-one reasoning: probes
-  # must tolerate normal request latency without flapping the pod ready state.
+  # Unrelated to gunicorn's keepalive; sized so probes tolerate normal
+  # request latency without flapping readiness.
   initialDelaySeconds: 5
   periodSeconds: 10
   timeoutSeconds: 3
@@ -64,6 +71,20 @@ ingress:
   scheme: internal
   host: ""
   healthCheckPath: /healthcheck
+  # ACM certificate ARN for `host`. Empty means plain HTTP on :80 -- see
+  # templates/ingress.yaml.
+  certificateArn: ""
+
+# See templates/pdb.yaml.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Soft zone + node spreading. See templates/deployment.yaml.
+topologySpread:
+  enabled: true
+  zoneMaxSkew: 1
+  nodeMaxSkew: 1
 
 podAnnotations: {}
 podLabels: {}

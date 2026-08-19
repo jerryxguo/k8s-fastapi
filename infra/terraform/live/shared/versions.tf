@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.7"
+  # 1.10 minimum: backend.tf uses the S3 backend's native `use_lockfile`,
+  # which does not exist before then.
+  required_version = ">= 1.10"
 
   required_providers {
     aws = {
@@ -14,7 +16,7 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
+  region  = var.region
   profile = var.profile
 
   default_tags {

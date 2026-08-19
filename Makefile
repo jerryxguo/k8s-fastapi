@@ -38,9 +38,13 @@ tf-validate:
 
 helm-lint:
 	helm lint infra/k8s/helm/fastapi-service
+	helm lint infra/k8s/helm/cluster-secret-store --set region=ap-southeast-2
 	@for env in dev prod; do \
 		echo "==> template check: $$env"; \
 		helm template fastapi-service infra/k8s/helm/fastapi-service \
 			-f infra/k8s/helm/fastapi-service/values.yaml \
 			-f infra/k8s/helm/fastapi-service/values-$$env.yaml > /dev/null; \
 	done
+	@echo "==> template check: cluster-secret-store"
+	@helm template cluster-secret-store infra/k8s/helm/cluster-secret-store \
+		--set region=ap-southeast-2 > /dev/null

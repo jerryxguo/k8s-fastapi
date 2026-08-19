@@ -17,18 +17,45 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  # Same group as reusable-deploy.yml so the two never overlap.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      # As in reusable-deploy.yml. Duplicated rather than extracted: two
+      # occurrences, and the variable lists differ.
+      - name: Check this Environment is configured
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${AWS_ROLE_ARN}" ]     || missing="${missing} AWS_ROLE_ARN"
+          [ -n "${AWS_REGION_VAR}" ]   || missing="${missing} AWS_REGION"
+          [ -n "${EKS_CLUSTER_NAME}" ] || missing="${missing} EKS_CLUSTER_NAME"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing variable(s) on the '${TARGET_ENVIRONMENT}' GitHub Environment:${missing}"
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "${{ vars.EKS_CLUSTER_NAME }}" --region "${{ vars.AWS_REGION }}"
+        env:
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+        run: aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION_VAR}"
 
       - name: Curl /healthcheck from inside the cluster
         run: |

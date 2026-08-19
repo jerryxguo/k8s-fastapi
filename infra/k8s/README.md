@@ -10,34 +10,29 @@ Controller -- all via the `kubernetes` and `helm` providers configured in
 access entry). See the "Cluster bootstrap, Terraform-managed" section in
 `live/<env>/main.tf` for the actual resources.
 
-There is nothing left for a human to run by hand for these in steady state
--- **except one known rough edge on a genuinely fresh cluster's first
-bootstrap**: `kubernetes_manifest.cluster_secret_store` validates its
-manifest against the target CRD's schema at *plan* time, and the External
-Secrets Operator's CRDs don't exist yet on a brand new cluster (even though
-the same apply is what's about to install them via
-`helm_release.external_secrets`).
+There is nothing left for a human to run by hand, and no bootstrap
+two-pass either. `terraform apply` is one-shot on a genuinely fresh
+environment.
 
-Re-running plain `terraform apply` does **not** fix this on its own, and
-will just fail the same way forever. Terraform computes the full plan for
-every resource before applying anything; if any one resource's plan
-errors, the whole apply aborts before creating *anything* -- including
-`helm_release.external_secrets`, which is what would install the CRD in
-the first place. The fix is to force a first pass that installs the CRDs
-without ever planning the resource that needs them, then apply normally:
+That used not to be the case. The `ClusterSecretStore` was created with
+`kubernetes_manifest`, which contacts the API server during *plan* to resolve
+the manifest's group-version against the live CRD set. On a fresh environment
+the cluster does not exist when the first plan runs, so that lookup fails, and
+a plan error aborts the whole apply before creating anything -- including the
+`helm_release` that installs the CRD. `depends_on` orders apply, not plan, so
+re-running plain `terraform apply` reproduced it indefinitely. The workaround
+was a documented two-pass bootstrap per cluster:
 
 ```bash
-terraform apply -target=helm_release.external_secrets
+terraform apply -target=helm_release.external_secrets   # no longer needed
 terraform apply
 ```
 
-`-target` only pulls in a resource's dependencies (here, `module.eks` and
-`module.external_secrets_irsa`), never things that depend on it -- so
-`cluster_secret_store` is excluded from that first plan entirely and can't
-block it. The second, untargeted apply then succeeds (the CRDs now exist)
-and also picks up everything else still pending from earlier failed
-attempts. This is only needed once per fresh cluster; every apply after
-that is unaffected.
+The store is now delivered by `helm_release.cluster_secret_store` over the
+small local chart in `helm/cluster-secret-store/`. `helm_release` performs no
+API lookup at plan time, so its plan succeeds against a cluster that does not
+exist yet and `depends_on` alone is sufficient to order the apply after the
+CRDs exist.
 
 ## Then deploy the app
 
@@ -52,22 +47,26 @@ helm upgrade --install k8s-demo-service infra/k8s/helm/fastapi-service \
   --set serviceAccount.roleArn=<app_irsa_role_arn output>
 ```
 
-No `--create-namespace` here -- it's deliberately **not** used, and not just
-left out as a style choice. `--create-namespace` doesn't do a "check first,
-only create if missing" dance from the API server's point of view: Helm
-issues an unconditional `create` call, and Kubernetes authorizes the verb
-against the role's RBAC grants *before* it ever checks whether the object
-already exists. For the CI/CD role (`AmazonEKSEditPolicy`, deliberately not
-cluster-admin -- see `modules/eks-cluster/main.tf`), that `create` call is
-always forbidden, regardless of whether the namespace is already there --
-confirmed against a real cluster where the namespace had existed for 15+
-minutes and the deploy still failed with "cannot create resource
-\"namespaces\" ... at the cluster scope". Since Terraform already
-guarantees the namespace exists (`kubernetes_namespace_v1.app` in
-`live/<env>/main.tf`) before any deploy ever runs, the flag serves no
-purpose here and only reintroduces a permission check the CI/CD role can
-never pass. The namespace isn't templated in the Helm chart itself either,
-see `helm/fastapi-service/templates/namespace.yaml`.
+No `--create-namespace` here -- it's deliberately **not** used, though not
+for a permissions reason anymore (the CI/CD role now runs as cluster-admin,
+see below). `--create-namespace` doesn't do a "check first, only create if
+missing" dance from the API server's point of view: Helm issues an
+unconditional `create` call, and Kubernetes authorizes the verb against the
+role's RBAC grants *before* it ever checks whether the object already
+exists. This used to matter a lot here: when CI/CD was scoped to
+`AmazonEKSEditPolicy`, that `create` call was always forbidden regardless of
+whether the namespace already existed -- confirmed against a real cluster
+where the namespace had existed for 15+ minutes and the deploy still failed
+with "cannot create resource \"namespaces\" ... at the cluster scope".
+CI/CD's access entry has since moved to `AmazonEKSClusterAdminPolicy` (see
+`modules/eks-cluster/main.tf` and cicd-gotchas.md in the k8s-fastapi-design
+skill for why), so that specific failure mode is gone -- but the flag is
+still left out, now simply because Terraform already guarantees the
+namespace exists (`kubernetes_namespace_v1.app` in `live/<env>/main.tf`)
+before any deploy ever runs, and having two systems both try to own the
+same namespace object is worth avoiding on its own. The namespace isn't
+templated in the Helm chart itself either, see
+`helm/fastapi-service/templates/namespace.yaml`.
 
 This is exactly what `.github/workflows/reusable-deploy.yml` automates in
 CI once the GitHub Environment variables described in the top-level

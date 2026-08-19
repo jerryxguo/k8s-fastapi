@@ -28,8 +28,11 @@ jobs:
   unit-test:
     uses: ./.github/workflows/reusable-unit-test.yml
 
+  infra-check:
+    uses: ./.github/workflows/reusable-infra-checks.yml
+
   build:
-    needs: [code-check, unit-test]
+    needs: [code-check, unit-test, infra-check]
     uses: ./.github/workflows/reusable-build-and-push.yml
 
   deploy-development:

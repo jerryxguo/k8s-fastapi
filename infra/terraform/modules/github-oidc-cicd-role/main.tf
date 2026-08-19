@@ -30,7 +30,7 @@ locals {
   github_org_claim  = var.github_owner_id != null ? "${var.github_org}@${var.github_owner_id}" : var.github_org
   github_repo_claim = var.github_repository_id != null ? "${var.github_repo}@${var.github_repository_id}" : var.github_repo
 
-  # e.g. "repo:your-org@123456/K8s@789012:environment:production"
+  # e.g. "repo:jerryxguo@10950337/k8s-fastapi@1337888631:environment:production"
   oidc_sub = var.github_environment != null ? "repo:${local.github_org_claim}/${local.github_repo_claim}:environment:${var.github_environment}" : "repo:${local.github_org_claim}/${local.github_repo_claim}:ref:refs/heads/${var.github_ref_branch}"
 }
 
@@ -107,6 +107,7 @@ data "aws_iam_policy_document" "boundary" {
 resource "aws_iam_policy" "boundary" {
   name   = "${var.name_prefix}-cicd-boundary"
   policy = data.aws_iam_policy_document.boundary.json
+  tags   = var.tags
 }
 
 resource "aws_iam_role" "cicd" {

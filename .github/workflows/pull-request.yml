@@ -9,9 +9,11 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
 
-concurrency:
-  group: pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# Cancellation is per job, not workflow-level: a workflow-level cancel would
+# kill a deploy part-way through `helm upgrade` and leave the release in
+# pending-upgrade. Only the cheap, interruptible jobs below are cancelled;
+# deploy and smoke-test inherit their serialising group from the reusable
+# workflows they call.
 
 permissions:
   id-token: write
@@ -19,13 +21,28 @@ permissions:
 
 jobs:
   code-check:
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-code-check
+      cancel-in-progress: true
     uses: ./.github/workflows/reusable-code-checks.yml
 
   unit-test:
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-unit-test
+      cancel-in-progress: true
     uses: ./.github/workflows/reusable-unit-test.yml
 
+  infra-check:
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-infra-check
+      cancel-in-progress: true
+    uses: ./.github/workflows/reusable-infra-checks.yml
+
   build:
-    needs: [code-check, unit-test]
+    needs: [code-check, unit-test, infra-check]
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-build
+      cancel-in-progress: true
     uses: ./.github/workflows/reusable-build-and-push.yml
 
   deploy-development:

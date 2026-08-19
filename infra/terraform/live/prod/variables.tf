@@ -74,3 +74,9 @@ variable "github_repository_id" {
   type    = string
   default = "1337888631"
 }
+
+variable "secret_recovery_window_days" {
+  description = "Secrets Manager soft-delete window for the app secret. Real recovery window; never 0 here."
+  type        = number
+  default     = 30
+}

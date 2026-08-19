@@ -1,28 +1,15 @@
-# Cross-platform build environments
-# pex_binary/docker_image target by default, instead of being declared and
-# left for someone to opt into by hand with `--environment=...`.
+# Cross-platform build environments, applied to every pex_binary/docker_image
+# by default via __defaults__ below.
 #
-# Why this exists: this project's EKS node group runs t3.medium
-# (linux/x86_64-- see node_instance_types in
-# infra/terraform/modules/eks-cluster/variables.tf), and GitHub Actions'
-# ubuntu-latest runners are also linux/x86_64. But `pants package
-# src/app:docker` can just as easily run on a developer's Apple Silicon Mac
-# (macos/arm64). Without forcing the resolve/build itself onto linux/x86_64,
-# the pex_binary bundles macOS wheels, and the Dockerfile's
-# `PEX_TOOLS=1 ... venv` step (which runs inside a linux container) fails
-# with "Failed to find compatible interpreter" -- this is the same failure
-# `complete_platforms` used to work around here; this environments setup
-# supersedes that (see src/app/BUILD), since it actually executes the
-# resolve on real linux/x86_64 rather than just fetching wheel metadata for
-# a platform tag.
+# The EKS node group and CI runners are linux/x86_64, but `pants package` can
+# run on an Apple Silicon Mac. Without forcing the resolve onto linux/x86_64
+# the PEX bundles macOS wheels and the Dockerfile's venv step fails with
+# "Failed to find compatible interpreter". See CLAUDE.md for the full trap.
 local_environment(
     name="local_linux",
     compatible_platforms=["linux_x86_64"],
-    # On a machine that's already linux/x86_64 (every CI runner), this
-    # environment matches directly and Pants just runs natively -- no
-    # Docker involved, no slowdown. Only when the *actual* local machine
-    # doesn't match (an Apple Silicon Mac) does Pants fall back to the
-    # `cross_build` docker_environment below.
+    # Matches natively on any linux/x86_64 machine (every CI runner); only a
+    # non-matching host falls back to the docker_environment below.
     fallback_environment="cross_build",
 )
 

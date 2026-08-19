@@ -28,6 +28,9 @@ max_requests = 1000
 max_requests_jitter = max_requests // 2
 
 timeout = 30
+# Explicit because the chart's terminationGracePeriodSeconds must stay above
+# it (plus its preStop pause). Raise one, raise the other.
+graceful_timeout = 30
 # Must stay above the ALB/Ingress idle timeout (default 60s) or the LB can
 # send a request down a connection gunicorn just closed -> intermittent 502.
 keepalive = 61

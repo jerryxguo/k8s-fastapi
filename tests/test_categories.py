@@ -17,7 +17,7 @@ def test_list_categories(client):
     client.post("/v1/categories", json={"name": "b"})
     resp = client.get("/v1/categories")
     assert resp.status_code == 200
-    assert len(resp.json()) >= 2
+    assert len(resp.json()) == 2
 
 
 def test_get_missing_category_404(client):
