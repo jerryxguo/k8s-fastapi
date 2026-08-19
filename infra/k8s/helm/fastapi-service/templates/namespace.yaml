@@ -1,6 +1,16 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{ .Values.namespace }}
-  labels:
-    {{- include "fastapi-service.labels" . | nindent 4 }}
+# Intentionally not templated here. Namespace create/update is a
+# cluster-scoped action that the CI/CD role's IAM policy deliberately does
+# NOT grant (modules/eks-cluster/main.tf scopes it to
+# AmazonEKSEditPolicy -- edit, not cluster-admin -- specifically so a
+# compromised or misconfigured CI/CD credential can't touch cluster-scoped
+# resources). Managing the Namespace as part of this release would require
+# widening that on every environment just to satisfy one resource. Instead,
+# the namespace is created by Terraform (kubernetes_namespace_v1.app in
+# live/<env>/main.tf, see infra/k8s/README.md), applied as whatever
+# principal is running `terraform apply` -- the same one already granted
+# cluster-admin via the EKS access entry -- before the app is ever deployed.
+#
+# `helm upgrade --install --create-namespace` is still safe to keep in the
+# deploy command as a harmless fallback: it only attempts creation if the
+# namespace doesn't already exist, and read-only existence checks are
+# allowed under the edit-scoped role even though create/update are not.
