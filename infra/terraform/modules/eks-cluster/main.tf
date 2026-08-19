@@ -75,8 +75,8 @@ module "eks" {
     # ebs-csi-node daemonset pods run fine without this, since the
     # per-node agent doesn't need EC2 API access.
     aws-ebs-csi-driver = {
-      most_recent               = true
-      service_account_role_arn  = aws_iam_role.ebs_csi.arn
+      most_recent              = true
+      service_account_role_arn = aws_iam_role.ebs_csi.arn
     }
   }
 
@@ -99,16 +99,9 @@ module "eks" {
   # by hand -- avoids the classic "locked myself out of the cluster" trap.
   authentication_mode = "API_AND_CONFIG_MAP"
 
-  # Both entries are unconditional -- var.cicd_role_arn is a required
-  # (non-nullable) input rather than optional, precisely so this map's key
-  # set stays static and known at plan time. An earlier version made the
-  # "cicd" key conditional on `var.cicd_role_arn == null`, which broke on a
-  # first apply: cicd_role_arn is the ARN of an IAM role created in this
-  # same run, so it's *unknown* at plan time (not null, just not-yet-known),
-  # and comparing an unknown value to null makes the comparison itself
-  # unknown -- which is exactly what triggers "Invalid for_each argument:
-  # ... keys derived from resource attributes that cannot be determined
-  # until apply". Requiring a real value up front sidesteps that entirely.
+  # Both entries unconditional, and cicd_role_arn is required rather than
+  # optional: gating a key on an apply-time-unknown ARN makes the for_each key
+  # set unknown, which Terraform rejects at plan.
   access_entries = {
     terraform-caller = {
       principal_arn = var.admin_principal_arn

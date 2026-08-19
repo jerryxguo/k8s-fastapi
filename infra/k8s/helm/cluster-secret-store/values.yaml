@@ -1,0 +1,10 @@
+# Must match the app chart's ExternalSecret secretStoreRef.name.
+name: aws-secretsmanager
+
+# Required; Terraform passes var.region.
+region: ""
+
+# The operator's ServiceAccount, which carries the IRSA annotation.
+serviceAccount:
+  name: external-secrets
+  namespace: external-secrets

@@ -29,7 +29,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       image: ${{ steps.image.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/bootstrap-pants
 
       - id: version
@@ -40,12 +40,12 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: pants package src/app:docker
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
         id: ecr-login
 
       - name: Tag and push image

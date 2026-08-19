@@ -1,0 +1,79 @@
+name: reusable-infra-checks
+
+# Static checks for Terraform and the Helm charts, mirroring `make
+# tf-fmt`/`tf-validate`/`helm-lint`. No AWS credentials needed: `init
+# -backend=false` only fetches providers and modules, and `helm template`
+# renders locally.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          # Satisfies the `>= 1.10` each live root declares; matches local dev.
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff infra/terraform
+
+      - name: terraform validate (all roots)
+        run: |
+          set -euo pipefail
+          for dir in infra/terraform/live/*/; do
+            echo "==> ${dir}"
+            terraform -chdir="${dir}" init -backend=false -input=false >/dev/null
+            terraform -chdir="${dir}" validate
+          done
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v3.16.1
+
+      - name: helm lint
+        run: |
+          set -euo pipefail
+          helm lint infra/k8s/helm/fastapi-service
+          # region is required(), so lint needs a value.
+          helm lint infra/k8s/helm/cluster-secret-store --set region=ap-southeast-2
+
+      - name: helm template (every environment value set)
+        run: |
+          set -euo pipefail
+          chart=infra/k8s/helm/fastapi-service
+          for env in dev prod; do
+            echo "==> ${env}"
+            helm template fastapi-service "${chart}" \
+              -f "${chart}/values.yaml" \
+              -f "${chart}/values-${env}.yaml" > /dev/null
+          done
+
+      - name: helm template (cluster-secret-store)
+        # Terraform installs this chart, so an error here would only surface
+        # during `terraform apply`.
+        run: |
+          helm template cluster-secret-store infra/k8s/helm/cluster-secret-store \
+            --set region=ap-southeast-2 > /dev/null
+
+      - name: helm template (TLS branch)
+        # values-*.yaml leave certificateArn empty, so the loop above never
+        # renders the HTTPS branch.
+        run: |
+          chart=infra/k8s/helm/fastapi-service
+          helm template fastapi-service "${chart}" \
+            -f "${chart}/values.yaml" \
+            -f "${chart}/values-prod.yaml" \
+            --set ingress.certificateArn=arn:aws:acm:ap-southeast-2:000000000000:certificate/ci-render-check \
+            > /dev/null

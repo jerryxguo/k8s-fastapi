@@ -6,6 +6,7 @@ metadata:
   labels:
     {{- include "fastapi-service.labels" . | nindent 4 }}
 spec:
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -25,6 +26,12 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "fastapi-service.fullname" . }}
+      # Must exceed preStopSleepSeconds + gunicorn's graceful_timeout (30s),
+      # or SIGKILL lands while requests are still draining.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -33,6 +40,14 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
+          {{- if gt (int .Values.preStopSleepSeconds) 0 }}
+          lifecycle:
+            preStop:
+              # Endpoint removal is asynchronous, so traffic still arrives
+              # after SIGTERM would land. Pause first, then shut down.
+              exec:
+                command: ["sleep", "{{ .Values.preStopSleepSeconds }}"]
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "fastapi-service.fullname" . }}-config
@@ -64,21 +79,36 @@ spec:
             runAsUser: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
-            # readOnlyRootFilesystem leaves no writable directory anywhere in
-            # the container -- gunicorn's worker heartbeat/tempfile handling
-            # (tempfile.mkstemp, tried /tmp, /var/tmp, /usr/tmp, /opt/app in
-            # that order) needs somewhere writable or it crashes on startup
-            # before ever binding its socket: "FileNotFoundError: No usable
-            # temporary directory found". An emptyDir mounted at /tmp is the
-            # standard fix -- ephemeral scratch space, gone on pod restart,
-            # which is exactly what gunicorn's tempfiles are anyway.
+            # readOnlyRootFilesystem leaves nothing writable, and gunicorn
+            # needs a scratch dir for its worker heartbeat or it crashes on
+            # startup with "No usable temporary directory found".
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: 128Mi
+      {{- if .Values.topologySpread.enabled }}
+      # ScheduleAnyway on both: DoNotSchedule would leave pods Pending rather
+      # than imbalanced, turning a preference into an outage during rollouts.
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.zoneMaxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "fastapi-service.selectorLabels" . | nindent 14 }}
+        - maxSkew: {{ .Values.topologySpread.nodeMaxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "fastapi-service.selectorLabels" . | nindent 14 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

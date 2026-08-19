@@ -5,10 +5,10 @@ description: >-
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: "3.11"
-    - uses: pantsbuild/actions/init-pants@v8
+    - uses: pantsbuild/actions/init-pants@0aaef864bd133c4055feb6adad0bfdce0de1c2e4 # v11
       with:
         gha-cache-key: v0
         named-caches-hash: ${{ hashFiles('src/requirements.lock') }}

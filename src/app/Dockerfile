@@ -4,7 +4,9 @@
 # this build's context as `src.app/app.pex` (the dotted, repo-root-relative
 # address of the pex_binary target) before invoking `docker build`. See
 # `docs/DESIGN-NOTES.md` for why this project builds this way.
-FROM python:3.11-slim AS build
+# Pinned by digest -- the 3.11-slim tag is rebuilt regularly. Multi-arch index
+# digest, so it resolves on both amd64 and arm64. python 3.11.16-slim-trixie.
+FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7 AS build
 
 COPY src.app/app.pex /app.pex
 # Converts the self-contained PEX into a plain venv layout at build time so
@@ -12,7 +14,7 @@ COPY src.app/app.pex /app.pex
 # container start).
 RUN PEX_TOOLS=1 python3.11 /app.pex venv --compile --scope=all /opt/app/
 
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7
 
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser
 COPY --from=build /opt/app /opt/app
