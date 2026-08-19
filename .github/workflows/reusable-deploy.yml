@@ -53,13 +53,12 @@ jobs:
           helm upgrade --install k8s-demo-service \
             infra/k8s/helm/fastapi-service \
             --namespace "${{ vars.APP_NAMESPACE || 'k8s-demo' }}" \
-            --create-namespace \
             -f "infra/k8s/helm/fastapi-service/values.yaml" \
             -f "infra/k8s/helm/fastapi-service/values-${{ vars.ENVIRONMENT_SHORT }}.yaml" \
             --set image.repository="${{ steps.image.outputs.repo }}" \
             --set image.tag="${{ steps.image.outputs.tag }}" \
             --set serviceAccount.roleArn="${{ vars.APP_IRSA_ROLE_ARN }}" \
-            --set externalSecret.enabled=false \
+            --set externalSecret.enabled=true \
             --wait --timeout 5m
 
       - name: Verify rollout
