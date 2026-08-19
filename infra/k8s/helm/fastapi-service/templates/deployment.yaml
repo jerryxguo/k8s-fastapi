@@ -64,6 +64,21 @@ spec:
             runAsUser: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+          volumeMounts:
+            # readOnlyRootFilesystem leaves no writable directory anywhere in
+            # the container -- gunicorn's worker heartbeat/tempfile handling
+            # (tempfile.mkstemp, tried /tmp, /var/tmp, /usr/tmp, /opt/app in
+            # that order) needs somewhere writable or it crashes on startup
+            # before ever binding its socket: "FileNotFoundError: No usable
+            # temporary directory found". An emptyDir mounted at /tmp is the
+            # standard fix -- ephemeral scratch space, gone on pod restart,
+            # which is exactly what gunicorn's tempfiles are anyway.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
