@@ -64,6 +64,26 @@ resource "aws_secretsmanager_secret" "app" {
   tags = local.tags
 }
 
+# aws_secretsmanager_secret only creates the secret's container -- it has
+# zero versions until something puts a value into it, and GetSecretValue
+# (what ExternalSecret's dataFrom.extract calls) fails outright against a
+# secret with no version at all ("Secret does not exist" from ESO's point
+# of view, even though the secret resource itself is right there in the
+# console). This placeholder version is required just to make the secret
+# syncable -- {} is valid, empty JSON, matching values.yaml's note that the
+# app tolerates missing keys via plain pydantic defaults.
+# `lifecycle.ignore_changes` is deliberate: once a human populates the real
+# value out of band (AWS CLI/console, never committed here), a future
+# `terraform apply` must not stomp it back to this placeholder.
+resource "aws_secretsmanager_secret_version" "app" {
+  secret_id     = aws_secretsmanager_secret.app.id
+  secret_string = jsonencode({})
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
 module "app_irsa" {
   source = "../../modules/irsa-role"
 
@@ -147,6 +167,15 @@ resource "kubernetes_namespace_v1" "hyperion" {
 
   depends_on = [module.eks]
 }
+
+# NOTE: this used to be a ClusterRole + ClusterRoleBinding granting the
+# CI/CD role permission to manage ExternalSecret objects specifically
+# (see cicd-gotchas.md in the k8s-fastapi-design skill for the full story
+# of why a naive aggregate-to-edit label didn't work). Removed now that
+# the "cicd" access entry in modules/eks-cluster/main.tf uses
+# AmazonEKSClusterAdminPolicy -- cluster-admin already covers this and
+# every other resource type, current or future, so a per-CRD RBAC grant
+# here would just be redundant dead weight.
 
 resource "helm_release" "external_secrets" {
   name             = "external-secrets"
