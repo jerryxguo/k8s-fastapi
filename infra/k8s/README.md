@@ -44,7 +44,7 @@ that is unaffected.
 ```bash
 aws eks update-kubeconfig --name <cluster_name> --region <region>
 helm upgrade --install k8s-demo-service infra/k8s/helm/fastapi-service \
-  --namespace k8s-demo --create-namespace \
+  --namespace k8s-demo \
   -f infra/k8s/helm/fastapi-service/values.yaml \
   -f infra/k8s/helm/fastapi-service/values-dev.yaml \
   --set image.repository=<ecr_repository_url output> \
@@ -52,12 +52,22 @@ helm upgrade --install k8s-demo-service infra/k8s/helm/fastapi-service \
   --set serviceAccount.roleArn=<app_irsa_role_arn output>
 ```
 
-(`--create-namespace` is left in as a harmless fallback -- it only attempts
-creation if the namespace is missing, which it won't be once the Terraform
-apply above has run. The namespace isn't templated in the Helm chart itself,
-see `helm/fastapi-service/templates/namespace.yaml` -- namespace
-create/update is a cluster-scoped action the CI/CD role's intentionally
-narrow IAM policy, `AmazonEKSEditPolicy`, can't perform.)
+No `--create-namespace` here -- it's deliberately **not** used, and not just
+left out as a style choice. `--create-namespace` doesn't do a "check first,
+only create if missing" dance from the API server's point of view: Helm
+issues an unconditional `create` call, and Kubernetes authorizes the verb
+against the role's RBAC grants *before* it ever checks whether the object
+already exists. For the CI/CD role (`AmazonEKSEditPolicy`, deliberately not
+cluster-admin -- see `modules/eks-cluster/main.tf`), that `create` call is
+always forbidden, regardless of whether the namespace is already there --
+confirmed against a real cluster where the namespace had existed for 15+
+minutes and the deploy still failed with "cannot create resource
+\"namespaces\" ... at the cluster scope". Since Terraform already
+guarantees the namespace exists (`kubernetes_namespace_v1.app` in
+`live/<env>/main.tf`) before any deploy ever runs, the flag serves no
+purpose here and only reintroduces a permission check the CI/CD role can
+never pass. The namespace isn't templated in the Helm chart itself either,
+see `helm/fastapi-service/templates/namespace.yaml`.
 
 This is exactly what `.github/workflows/reusable-deploy.yml` automates in
 CI once the GitHub Environment variables described in the top-level
