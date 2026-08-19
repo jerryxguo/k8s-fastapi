@@ -123,9 +123,26 @@ module "eks" {
       principal_arn = var.cicd_role_arn
       policy_associations = {
         deploy = {
-          # Scoped to editing workloads, not full cluster-admin -- CI/CD
-          # only ever needs to roll out this project's own namespace.
-          policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy"
+          # DECISION: cluster-admin, not a narrower policy. This project
+          # originally scoped CI/CD to AmazonEKSEditPolicy specifically so
+          # a compromised GitHub Actions credential couldn't touch
+          # cluster-scoped resources. In practice that traded a one-time
+          # security decision for ongoing, recurring friction: AWS's
+          # managed access policies (Edit, View, Admin) are each a fixed,
+          # AWS-defined permission set that can never be extended -- not
+          # even by aggregating a custom ClusterRole into Kubernetes'
+          # native "edit"/"admin" roles, since access entries bound via
+          # policy_associations never consult those objects at all (see
+          # cicd-gotchas.md's writeup on this, kept for the general
+          # lesson). Every new CRD a Helm chart introduces (ExternalSecret
+          # was the first) would otherwise need its own hand-rolled
+          # kubernetes_groups + ClusterRoleBinding workaround, forever.
+          # Cluster-admin trades that away: a compromised CI/CD credential
+          # could do real damage (read all secrets, delete nodes, disable
+          # the ALB controller, touch other namespaces), but this was a
+          # deliberate, explicit choice to accept that risk in exchange
+          # for CI/CD simply working without per-CRD RBAC plumbing.
+          policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
           access_scope = { type = "cluster" }
         }
       }
