@@ -40,6 +40,30 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: pants package src/app:docker
 
+      # Before configure-aws-credentials: an unset vars.* renders as an omitted
+      # line in the printed `with:` block, so the action fails with "Input
+      # required and not supplied: aws-region" and nothing points at the
+      # Environment. ECR_REPOSITORY is checked here too -- empty, it makes the
+      # push step run `docker tag ... ":<version>"`.
+      - name: Check this Environment is configured
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${AWS_ROLE_ARN}" ]    || missing="${missing} AWS_ROLE_ARN"
+          [ -n "${AWS_REGION_VAR}" ]  || missing="${missing} AWS_REGION"
+          [ -n "${ECR_REPOSITORY}" ]  || missing="${missing} ECR_REPOSITORY"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing variable(s) on the 'shared' GitHub Environment:${missing}"
+            echo "Set them as Environment *variables* (not secrets) under"
+            echo "Settings -> Environments -> shared. Values come from"
+            echo "'terraform output' in infra/terraform/live/shared."
+            exit 1
+          fi
+
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
