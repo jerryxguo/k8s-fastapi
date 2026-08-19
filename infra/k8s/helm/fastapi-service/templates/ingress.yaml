@@ -1,7 +1,11 @@
 {{- if .Values.ingress.enabled }}
-# Requires the AWS Load Balancer Controller to be installed cluster-wide
-# (see infra/k8s/README.md) -- it watches this Ingress and provisions/updates
-# the actual ALB.
+# Selected via spec.ingressClassName, not the deprecated
+# kubernetes.io/ingress.class annotation.
+#
+# TLS: an HTTPS listener with no certificate-arn does not fail loudly -- the
+# controller falls back to matching an ACM certificate against the Ingress
+# host, and when nothing matches it never creates the ALB at all. So HTTPS is
+# only requested when ingress.certificateArn is set.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -10,12 +14,21 @@ metadata:
   labels:
     {{- include "fastapi-service.labels" . | nindent 4 }}
   annotations:
-    kubernetes.io/ingress.class: {{ .Values.ingress.className }}
     alb.ingress.kubernetes.io/scheme: {{ .Values.ingress.scheme }}
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/healthcheck-path: {{ .Values.ingress.healthCheckPath }}
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    {{- if .Values.ingress.certificateArn }}
+    # HTTP alongside HTTPS: ssl-redirect installs its redirect on the HTTP
+    # listener, so :443 alone would leave it nothing to act on.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    {{- else }}
+    # No certificate yet: plain HTTP, so the ALB is still created.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    {{- end }}
 spec:
+  ingressClassName: {{ .Values.ingress.className }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:

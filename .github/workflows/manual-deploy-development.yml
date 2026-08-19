@@ -1,0 +1,61 @@
+name: manual-deploy-development
+
+# Deploy any branch to the development environment on demand, from the Actions
+# tab: pick this workflow, choose the branch in "Use workflow from", Run.
+#
+# It builds from the selected ref rather than taking a prebuilt image, so what
+# lands in dev is always that branch's code. The image tag is unique per run
+# (v<date>.<run-id>), which the immutable ECR repo requires.
+#
+# Deploys share the `deploy-development` concurrency group with the PR and
+# release pipelines, so a manual run queues behind an automated one instead of
+# racing it for the same Helm release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_checks:
+        description: "Skip lint/test/infra checks (faster iteration; the PR pipeline still runs them)"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # `inputs.x`, not `github.event.inputs.x` -- the latter is a string, so
+  # "false" would be truthy and the checks would always skip.
+  code-check:
+    if: ${{ !inputs.skip_checks }}
+    uses: ./.github/workflows/reusable-code-checks.yml
+
+  unit-test:
+    if: ${{ !inputs.skip_checks }}
+    uses: ./.github/workflows/reusable-unit-test.yml
+
+  infra-check:
+    if: ${{ !inputs.skip_checks }}
+    uses: ./.github/workflows/reusable-infra-checks.yml
+
+  build:
+    needs: [code-check, unit-test, infra-check]
+    # A skipped `needs` job skips its dependents by default, so with
+    # skip_checks the build would never run. always() plus the explicit
+    # failure/cancelled guards keep "skipped" as a pass without also letting a
+    # genuine check failure through.
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    uses: ./.github/workflows/reusable-build-and-push.yml
+
+  deploy-development:
+    needs: build
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: development
+      image: ${{ needs.build.outputs.image }}
+
+  smoke-test-development:
+    needs: deploy-development
+    uses: ./.github/workflows/reusable-smoke-test.yml
+    with:
+      environment: development

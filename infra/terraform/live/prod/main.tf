@@ -47,13 +47,13 @@ module "eks" {
 module "cicd_role" {
   source = "../../modules/github-oidc-cicd-role"
 
-  name_prefix                 = var.name_prefix
-  github_org                  = var.github_org
-  github_repo                 = var.github_repo
-  github_owner_id             = var.github_owner_id
-  github_repository_id        = var.github_repository_id
-  github_environment          = "production"
-  grant_ecr_push              = false # prod only deploys; "shared" owns push access
+  name_prefix                = var.name_prefix
+  github_org                 = var.github_org
+  github_repo                = var.github_repo
+  github_owner_id            = var.github_owner_id
+  github_repository_id       = var.github_repository_id
+  github_environment         = "production"
+  grant_ecr_push             = false # prod only deploys; "shared" owns push access
   create_oidc_provider       = var.create_oidc_provider
   existing_oidc_provider_arn = var.existing_oidc_provider_arn
   tags                       = local.tags
@@ -136,17 +136,14 @@ module "external_secrets_irsa" {
 # Cluster bootstrap, Terraform-managed. This used to be a set of manual
 # kubectl/helm steps in infra/k8s/README.md -- moved here so a fresh
 # environment is fully stood up by `terraform apply` alone, with nothing
-# left for a human to run by hand afterward. The CI/CD role's IAM policy
-# (modules/eks-cluster/main.tf) stays deliberately scoped to
-# AmazonEKSEditPolicy -- none of this needs to run as CI; it runs as
-# whatever principal is applying Terraform (var.admin_principal_arn), the
-# same one already granted cluster-admin via the EKS access entry.
+# left for a human to run by hand afterward. None of this runs as CI: it runs
+# as whatever principal applies Terraform (var.admin_principal_arn), granted
+# cluster-admin by the access entry in modules/eks-cluster/main.tf.
 # ---------------------------------------------------------------------------
 
 # The app's namespace. Not templated in the Helm chart itself (see
-# infra/k8s/helm/fastapi-service/templates/namespace.yaml) because
-# namespace create/update is a cluster-scoped action the CI/CD role can't
-# perform -- so it's created here instead, before the app is ever deployed.
+# infra/k8s/helm/fastapi-service/templates/namespace.yaml) so Terraform stays
+# the single owner of the namespace object.
 resource "kubernetes_namespace_v1" "app" {
   metadata {
     name = "k8s-demo"
@@ -156,10 +153,8 @@ resource "kubernetes_namespace_v1" "app" {
 }
 
 # Namespace for the hyperion service, sharing this same EKS cluster. Same
-# reasoning as kubernetes_namespace_v1.app above -- if hyperion's own
-# deploy job assumes a CI/CD role scoped the same way (AmazonEKSEditPolicy,
-# not cluster-admin), its Helm chart can't template/manage this namespace
-# itself either, so it's created here instead.
+# reasoning as kubernetes_namespace_v1.app above, and a worked example of
+# adding a second service's namespace to this shared cluster.
 resource "kubernetes_namespace_v1" "hyperion" {
   metadata {
     name = "hyperion"
@@ -168,19 +163,13 @@ resource "kubernetes_namespace_v1" "hyperion" {
   depends_on = [module.eks]
 }
 
-# NOTE: this used to be a ClusterRole + ClusterRoleBinding granting the
-# CI/CD role permission to manage ExternalSecret objects specifically
-# (see cicd-gotchas.md in the k8s-fastapi-design skill for the full story
-# of why a naive aggregate-to-edit label didn't work). Removed now that
-# the "cicd" access entry in modules/eks-cluster/main.tf uses
-# AmazonEKSClusterAdminPolicy -- cluster-admin already covers this and
-# every other resource type, current or future, so a per-CRD RBAC grant
-# here would just be redundant dead weight.
-
 resource "helm_release" "external_secrets" {
-  name             = "external-secrets"
-  repository       = "https://charts.external-secrets.io"
-  chart            = "external-secrets"
+  name       = "external-secrets"
+  repository = "https://charts.external-secrets.io"
+  chart      = "external-secrets"
+  # Pinned: unpinned, two applies weeks apart can install different operator
+  # versions, including across a CRD API-version bump.
+  version          = "2.9.0"
   namespace        = "external-secrets"
   create_namespace = true
 
@@ -199,95 +188,55 @@ resource "helm_release" "external_secrets" {
   depends_on = [module.eks, module.external_secrets_irsa]
 }
 
-# The ClusterSecretStore the chart's ExternalSecret resources reference.
+# The ClusterSecretStore the app chart's ExternalSecret references.
 #
-# KNOWN BOOTSTRAP CAVEAT: kubernetes_manifest validates its manifest against
-# the target CRD's schema at *plan* time, not just apply time -- so on a
-# genuinely fresh cluster, the very first `terraform apply` will fail here
-# (the external-secrets CRDs don't exist yet when this resource is
-# planned, even though helm_release.external_secrets is what's about to
-# create them).
-#
-# IMPORTANT: re-running plain `terraform apply` does NOT fix this on its
-# own. Terraform computes the full plan for every resource before applying
-# anything; if any one resource's plan errors, the whole apply aborts
-# before creating ANYTHING -- including helm_release.external_secrets,
-# which is what would install the CRD in the first place. depends_on only
-# orders apply once a plan exists; it can't rescue a resource whose plan
-# itself fails. Re-running untargeted just reproduces the same error
-# forever on a genuinely fresh cluster.
-#
-# The actual fix, once per fresh cluster: force a first pass that installs
-# the CRDs without ever planning this resource, then apply normally.
-#   terraform apply -target=helm_release.external_secrets
-#   terraform apply
-# -target only pulls in a resource's dependencies (module.eks,
-# module.external_secrets_irsa), never things that depend on it -- so this
-# resource is excluded from that first plan entirely and can't block it.
-# The second, untargeted apply then succeeds (CRDs exist) and also picks
-# up everything else still pending. Every apply after that is unaffected.
-#
-# apiVersion pinned to v1, not v1beta1: chart version 2.9.0 (external-secrets
-# operator) only serves ClusterSecretStore under external-secrets.io/v1 --
-# v1beta1 was promoted/removed. `kubectl api-resources` against a live
-# cluster confirmed this (clustersecretstores  external-secrets.io/v1). Using
-# a version the CRD doesn't serve fails with the same "cannot select exact
-# GV from REST mapper" error as a genuinely-missing CRD, which is easy to
-# misdiagnose as the CRD-bootstrap caveat above rather than a stale
-# apiVersion -- confirm what a CRD actually serves with `kubectl api-resources`
-# before assuming a GV error is the bootstrap-ordering issue.
-resource "kubernetes_manifest" "cluster_secret_store" {
-  manifest = {
-    apiVersion = "external-secrets.io/v1"
-    kind       = "ClusterSecretStore"
-    metadata = {
-      name = "aws-secretsmanager"
-    }
-    spec = {
-      provider = {
-        aws = {
-          service = "SecretsManager"
-          region  = var.region
-          auth = {
-            jwt = {
-              serviceAccountRef = {
-                name      = "external-secrets"
-                namespace = "external-secrets"
-              }
-            }
-          }
-        }
-      }
-    }
+# helm_release, not kubernetes_manifest: kubernetes_manifest resolves its
+# group-version against the live API during *plan*, which cannot succeed on a
+# fresh environment where the cluster does not exist yet -- and a plan error
+# aborts the whole apply, including the release that installs the CRD. Helm
+# does no plan-time lookup, so depends_on below is sufficient and `terraform
+# apply` is one-shot. The chart pins apiVersion v1; v1beta1 is no longer
+# served and fails as if the CRD were missing.
+resource "helm_release" "cluster_secret_store" {
+  name  = "cluster-secret-store"
+  chart = "${path.module}/../../../k8s/helm/cluster-secret-store"
+  # Cluster-scoped object, but a Helm release still needs a namespace to keep
+  # its own release metadata in. external-secrets already exists by this
+  # point (helm_release.external_secrets creates it).
+  namespace = "external-secrets"
+
+  set {
+    name  = "region"
+    value = var.region
   }
 
+  # Orders the apply after the operator and therefore after its CRDs. Unlike
+  # the kubernetes_manifest version, this is sufficient on its own.
   depends_on = [helm_release.external_secrets]
 }
 
-# AWS Load Balancer Controller -- required for infra/k8s/helm's
-# ingress.yaml (className: alb). The IAM policy is AWS's own published
-# policy for this controller (there's no AWS-managed policy ARN for it),
-# fetched at apply time rather than vendored as a ~500-line local copy so
-# it doesn't silently go stale; pin the URL's version tag deliberately and
-# bump it occasionally rather than tracking a branch.
-data "http" "alb_controller_policy" {
-  url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.13.0/docs/install/iam_policy.json"
-}
-
+# AWS Load Balancer Controller. AWS publishes no managed policy ARN for it,
+# so the policy is vendored (policies/aws-load-balancer-controller-v2.13.4.json,
+# from that tag's docs/install/iam_policy.json) rather than fetched at apply
+# time: an apply then needs no third-party egress, and a permission change
+# shows up in a diff. The vendored version and the chart version below must
+# move together -- a controller newer than its policy fails at runtime, not
+# at apply.
 resource "aws_iam_policy" "alb_controller" {
   name   = "${var.name_prefix}-alb-controller"
-  policy = data.http.alb_controller_policy.response_body
+  policy = file("${path.module}/../../policies/aws-load-balancer-controller-v2.13.4.json")
+  tags   = local.tags
 }
 
 module "alb_controller_irsa" {
   source = "../../modules/irsa-role"
 
-  name_prefix           = var.name_prefix
-  oidc_provider_arn     = module.eks.oidc_provider_arn
-  oidc_provider_url     = module.eks.oidc_provider_url
-  namespace             = "kube-system"
-  service_account_name  = "aws-load-balancer-controller"
-  managed_policy_arns   = [aws_iam_policy.alb_controller.arn]
+  name_prefix          = var.name_prefix
+  oidc_provider_arn    = module.eks.oidc_provider_arn
+  oidc_provider_url    = module.eks.oidc_provider_url
+  namespace            = "kube-system"
+  service_account_name = "aws-load-balancer-controller"
+  managed_policy_arns  = [aws_iam_policy.alb_controller.arn]
 
   tags = local.tags
 }
@@ -296,7 +245,11 @@ resource "helm_release" "aws_load_balancer_controller" {
   name       = "aws-load-balancer-controller"
   repository = "https://aws.github.io/eks-charts"
   chart      = "aws-load-balancer-controller"
-  namespace  = "kube-system"
+  # Chart version is not the app version: 1.13.4 ships controller v2.13.4,
+  # matching the vendored IAM policy. Newest is 3.x (a major controller
+  # release) -- moving there means bumping the policy too.
+  version   = "1.13.4"
+  namespace = "kube-system"
 
   set {
     name  = "clusterName"

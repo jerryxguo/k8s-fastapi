@@ -1,0 +1,17 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# Without this, a node drain can evict every replica at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fastapi-service.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fastapi-service.labels" . | nindent 4 }}
+spec:
+  # maxUnavailable, not minAvailable: with minAvailable at dev's single-replica
+  # HPA floor, a drain can never satisfy the budget and blocks forever.
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "fastapi-service.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: cluster-secret-store
+description: >-
+  The cluster-scoped ExternalSecrets ClusterSecretStore pointing at AWS
+  Secrets Manager. A chart of its own so Terraform can create it with
+  helm_release instead of kubernetes_manifest -- see the resource comment in
+  infra/terraform/live/<env>/main.tf for why that distinction matters.
+type: application
+version: 0.1.0
+appVersion: "1"

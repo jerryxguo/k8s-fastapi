@@ -15,7 +15,7 @@ def test_list_items(client):
     client.post("/v1/items", json={"name": "b"})
     resp = client.get("/v1/items")
     assert resp.status_code == 200
-    assert len(resp.json()) >= 2
+    assert len(resp.json()) == 2
 
 
 def test_get_missing_item_404(client):
