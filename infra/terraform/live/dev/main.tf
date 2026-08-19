@@ -59,7 +59,12 @@ module "cicd_role" {
 # populate real values out of band (never commit real secrets to tfvars).
 resource "aws_secretsmanager_secret" "app" {
   name = "${var.name_prefix}/app-config"
-  tags = local.tags
+  # Secrets Manager soft-deletes: for recovery_window_in_days the name stays
+  # reserved, and re-creating it fails with "already scheduled for deletion".
+  # 0 in dev, where the environment is torn down and rebuilt; prod keeps a
+  # real window.
+  recovery_window_in_days = var.secret_recovery_window_days
+  tags                    = local.tags
 }
 
 # aws_secretsmanager_secret only creates the secret's container -- it has
@@ -280,6 +285,18 @@ resource "helm_release" "aws_load_balancer_controller" {
   set {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
     value = module.alb_controller_irsa.role_arn
+  }
+
+  # Off deliberately. This webhook exists only to make the controller the
+  # default for type: LoadBalancer Services, of which this project has none
+  # (the app Service is ClusterIP behind an Ingress). It registers
+  # cluster-wide with failurePolicy: Fail, so while the controller has no
+  # ready endpoints NO Service can be created anywhere -- which blocks the
+  # other helm_releases in this same apply with "no endpoints available for
+  # service aws-load-balancer-webhook-service".
+  set {
+    name  = "enableServiceMutatorWebhook"
+    value = "false"
   }
 
   depends_on = [module.eks, module.alb_controller_irsa]
