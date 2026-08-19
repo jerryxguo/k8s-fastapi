@@ -1,66 +1,43 @@
-# Cluster bootstrap (one-time, per environment)
+# Cluster bootstrap
 
-The Helm chart in `helm/fastapi-service` deploys **this one service**. Two
-pieces of cluster-wide infrastructure need to exist first, from public Helm
-charts -- install them once per cluster, not per service:
+This used to be a set of manual `kubectl`/`helm` steps run once per cluster
+before the first deploy. It's now fully Terraform-managed: `terraform apply`
+in `live/<env>` creates the app's namespace, installs the External Secrets
+Operator and its `ClusterSecretStore`, and installs the AWS Load Balancer
+Controller -- all via the `kubernetes` and `helm` providers configured in
+`live/<env>/versions.tf`, authenticated as whatever principal is running
+`terraform apply` (the same one already granted cluster-admin via the EKS
+access entry). See the "Cluster bootstrap, Terraform-managed" section in
+`live/<env>/main.tf` for the actual resources.
 
-## 1. AWS Load Balancer Controller
+There is nothing left for a human to run by hand for these in steady state
+-- **except one known rough edge on a genuinely fresh cluster's first
+bootstrap**: `kubernetes_manifest.cluster_secret_store` validates its
+manifest against the target CRD's schema at *plan* time, and the External
+Secrets Operator's CRDs don't exist yet on a brand new cluster (even though
+the same apply is what's about to install them via
+`helm_release.external_secrets`).
 
-```bash
-helm repo add eks https://aws.github.io/eks-charts
-helm repo update
-helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
-  -n kube-system \
-  --set clusterName=<cluster_name output> \
-  --set serviceAccount.create=true \
-  --set serviceAccount.name=aws-load-balancer-controller \
-  --set region=<region> \
-  --set vpcId=<vpc_id from terraform output>
-```
-
-(Attach an IRSA role with the AWS-published `AWSLoadBalancerControllerIAMPolicy`
-to the `aws-load-balancer-controller` ServiceAccount, the same way
-`infra/terraform/modules/irsa-role` is used for the app -- add a module
-instance for it in `live/<env>/main.tf` if you want this Terraform-managed
-rather than click-ops.)
-
-## 2. External Secrets Operator
-
-```bash
-helm repo add external-secrets https://charts.external-secrets.io
-helm repo update
-helm install external-secrets external-secrets/external-secrets \
-  -n external-secrets --create-namespace \
-  --set serviceAccount.name=external-secrets
-```
-
-Then annotate its ServiceAccount with the `external_secrets_irsa_role_arn`
-Terraform output:
+Re-running plain `terraform apply` does **not** fix this on its own, and
+will just fail the same way forever. Terraform computes the full plan for
+every resource before applying anything; if any one resource's plan
+errors, the whole apply aborts before creating *anything* -- including
+`helm_release.external_secrets`, which is what would install the CRD in
+the first place. The fix is to force a first pass that installs the CRDs
+without ever planning the resource that needs them, then apply normally:
 
 ```bash
-kubectl annotate serviceaccount external-secrets -n external-secrets \
-  eks.amazonaws.com/role-arn=<external_secrets_irsa_role_arn output>
+terraform apply -target=helm_release.external_secrets
+terraform apply
 ```
 
-And create the `ClusterSecretStore` the chart's `ExternalSecret` resources
-reference:
-
-```yaml
-apiVersion: external-secrets.io/v1beta1
-kind: ClusterSecretStore
-metadata:
-  name: aws-secretsmanager
-spec:
-  provider:
-    aws:
-      service: SecretsManager
-      region: <region>
-      auth:
-        jwt:
-          serviceAccountRef:
-            name: external-secrets
-            namespace: external-secrets
-```
+`-target` only pulls in a resource's dependencies (here, `module.eks` and
+`module.external_secrets_irsa`), never things that depend on it -- so
+`cluster_secret_store` is excluded from that first plan entirely and can't
+block it. The second, untargeted apply then succeeds (the CRDs now exist)
+and also picks up everything else still pending from earlier failed
+attempts. This is only needed once per fresh cluster; every apply after
+that is unaffected.
 
 ## Then deploy the app
 
@@ -74,6 +51,13 @@ helm upgrade --install k8s-demo-service infra/k8s/helm/fastapi-service \
   --set image.tag=<a real tag> \
   --set serviceAccount.roleArn=<app_irsa_role_arn output>
 ```
+
+(`--create-namespace` is left in as a harmless fallback -- it only attempts
+creation if the namespace is missing, which it won't be once the Terraform
+apply above has run. The namespace isn't templated in the Helm chart itself,
+see `helm/fastapi-service/templates/namespace.yaml` -- namespace
+create/update is a cluster-scoped action the CI/CD role's intentionally
+narrow IAM policy, `AmazonEKSEditPolicy`, can't perform.)
 
 This is exactly what `.github/workflows/reusable-deploy.yml` automates in
 CI once the GitHub Environment variables described in the top-level

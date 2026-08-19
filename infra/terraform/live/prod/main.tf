@@ -111,3 +111,193 @@ module "external_secrets_irsa" {
 
   tags = local.tags
 }
+
+# ---------------------------------------------------------------------------
+# Cluster bootstrap, Terraform-managed. This used to be a set of manual
+# kubectl/helm steps in infra/k8s/README.md -- moved here so a fresh
+# environment is fully stood up by `terraform apply` alone, with nothing
+# left for a human to run by hand afterward. The CI/CD role's IAM policy
+# (modules/eks-cluster/main.tf) stays deliberately scoped to
+# AmazonEKSEditPolicy -- none of this needs to run as CI; it runs as
+# whatever principal is applying Terraform (var.admin_principal_arn), the
+# same one already granted cluster-admin via the EKS access entry.
+# ---------------------------------------------------------------------------
+
+# The app's namespace. Not templated in the Helm chart itself (see
+# infra/k8s/helm/fastapi-service/templates/namespace.yaml) because
+# namespace create/update is a cluster-scoped action the CI/CD role can't
+# perform -- so it's created here instead, before the app is ever deployed.
+resource "kubernetes_namespace_v1" "app" {
+  metadata {
+    name = "k8s-demo"
+  }
+
+  depends_on = [module.eks]
+}
+
+# Namespace for the hyperion service, sharing this same EKS cluster. Same
+# reasoning as kubernetes_namespace_v1.app above -- if hyperion's own
+# deploy job assumes a CI/CD role scoped the same way (AmazonEKSEditPolicy,
+# not cluster-admin), its Helm chart can't template/manage this namespace
+# itself either, so it's created here instead.
+resource "kubernetes_namespace_v1" "hyperion" {
+  metadata {
+    name = "hyperion"
+  }
+
+  depends_on = [module.eks]
+}
+
+resource "helm_release" "external_secrets" {
+  name             = "external-secrets"
+  repository       = "https://charts.external-secrets.io"
+  chart            = "external-secrets"
+  namespace        = "external-secrets"
+  create_namespace = true
+
+  set {
+    name  = "serviceAccount.name"
+    value = "external-secrets"
+  }
+
+  # Replaces the manual `kubectl annotate serviceaccount ...` step --
+  # the IRSA role annotation is applied by Helm at install time instead.
+  set {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = module.external_secrets_irsa.role_arn
+  }
+
+  depends_on = [module.eks, module.external_secrets_irsa]
+}
+
+# The ClusterSecretStore the chart's ExternalSecret resources reference.
+#
+# KNOWN BOOTSTRAP CAVEAT: kubernetes_manifest validates its manifest against
+# the target CRD's schema at *plan* time, not just apply time -- so on a
+# genuinely fresh cluster, the very first `terraform apply` will fail here
+# (the external-secrets CRDs don't exist yet when this resource is
+# planned, even though helm_release.external_secrets is what's about to
+# create them).
+#
+# IMPORTANT: re-running plain `terraform apply` does NOT fix this on its
+# own. Terraform computes the full plan for every resource before applying
+# anything; if any one resource's plan errors, the whole apply aborts
+# before creating ANYTHING -- including helm_release.external_secrets,
+# which is what would install the CRD in the first place. depends_on only
+# orders apply once a plan exists; it can't rescue a resource whose plan
+# itself fails. Re-running untargeted just reproduces the same error
+# forever on a genuinely fresh cluster.
+#
+# The actual fix, once per fresh cluster: force a first pass that installs
+# the CRDs without ever planning this resource, then apply normally.
+#   terraform apply -target=helm_release.external_secrets
+#   terraform apply
+# -target only pulls in a resource's dependencies (module.eks,
+# module.external_secrets_irsa), never things that depend on it -- so this
+# resource is excluded from that first plan entirely and can't block it.
+# The second, untargeted apply then succeeds (CRDs exist) and also picks
+# up everything else still pending. Every apply after that is unaffected.
+#
+# apiVersion pinned to v1, not v1beta1: chart version 2.9.0 (external-secrets
+# operator) only serves ClusterSecretStore under external-secrets.io/v1 --
+# v1beta1 was promoted/removed. `kubectl api-resources` against a live
+# cluster confirmed this (clustersecretstores  external-secrets.io/v1). Using
+# a version the CRD doesn't serve fails with the same "cannot select exact
+# GV from REST mapper" error as a genuinely-missing CRD, which is easy to
+# misdiagnose as the CRD-bootstrap caveat above rather than a stale
+# apiVersion -- confirm what a CRD actually serves with `kubectl api-resources`
+# before assuming a GV error is the bootstrap-ordering issue.
+resource "kubernetes_manifest" "cluster_secret_store" {
+  manifest = {
+    apiVersion = "external-secrets.io/v1"
+    kind       = "ClusterSecretStore"
+    metadata = {
+      name = "aws-secretsmanager"
+    }
+    spec = {
+      provider = {
+        aws = {
+          service = "SecretsManager"
+          region  = var.region
+          auth = {
+            jwt = {
+              serviceAccountRef = {
+                name      = "external-secrets"
+                namespace = "external-secrets"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [helm_release.external_secrets]
+}
+
+# AWS Load Balancer Controller -- required for infra/k8s/helm's
+# ingress.yaml (className: alb). The IAM policy is AWS's own published
+# policy for this controller (there's no AWS-managed policy ARN for it),
+# fetched at apply time rather than vendored as a ~500-line local copy so
+# it doesn't silently go stale; pin the URL's version tag deliberately and
+# bump it occasionally rather than tracking a branch.
+data "http" "alb_controller_policy" {
+  url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.13.0/docs/install/iam_policy.json"
+}
+
+resource "aws_iam_policy" "alb_controller" {
+  name   = "${var.name_prefix}-alb-controller"
+  policy = data.http.alb_controller_policy.response_body
+}
+
+module "alb_controller_irsa" {
+  source = "../../modules/irsa-role"
+
+  name_prefix           = var.name_prefix
+  oidc_provider_arn     = module.eks.oidc_provider_arn
+  oidc_provider_url     = module.eks.oidc_provider_url
+  namespace             = "kube-system"
+  service_account_name  = "aws-load-balancer-controller"
+  managed_policy_arns   = [aws_iam_policy.alb_controller.arn]
+
+  tags = local.tags
+}
+
+resource "helm_release" "aws_load_balancer_controller" {
+  name       = "aws-load-balancer-controller"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-load-balancer-controller"
+  namespace  = "kube-system"
+
+  set {
+    name  = "clusterName"
+    value = module.eks.cluster_name
+  }
+
+  set {
+    name  = "region"
+    value = var.region
+  }
+
+  set {
+    name  = "vpcId"
+    value = module.vpc.vpc_id
+  }
+
+  set {
+    name  = "serviceAccount.create"
+    value = "true"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = "aws-load-balancer-controller"
+  }
+
+  set {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = module.alb_controller_irsa.role_arn
+  }
+
+  depends_on = [module.eks, module.alb_controller_irsa]
+}
