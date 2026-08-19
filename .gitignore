@@ -17,5 +17,5 @@ pants.log
 .terraform/
 *.tfstate
 *.tfstate.*
-.terraform.lock.hcl
+!.terraform.lock.hcl
 *.tfvars
