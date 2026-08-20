@@ -86,6 +86,22 @@ module "eks" {
     }
   }
 
+  # The metrics-server add-on serves its aggregated API on :10251, and the
+  # control plane connects straight to the pod IP (VPC CNI gives pods real VPC
+  # addresses). The module's recommended rules cover 443/4443/6443/8443/9443
+  # and kubelet 10250, but not 10251, so without this the APIService reports
+  # Available=False / FailedDiscoveryCheck and the HPA sees cpu: <unknown>.
+  node_security_group_additional_rules = {
+    metrics_server_aggregated_api = {
+      description                   = "Control plane to metrics-server aggregated API"
+      protocol                      = "tcp"
+      from_port                     = 10251
+      to_port                       = 10251
+      type                          = "ingress"
+      source_cluster_security_group = true
+    }
+  }
+
   eks_managed_node_groups = {
     default = {
       min_size       = var.node_min_size
