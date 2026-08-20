@@ -65,6 +65,12 @@ module "eks" {
     coredns    = { most_recent = true }
     kube-proxy = { most_recent = true }
     vpc-cni    = { most_recent = true }
+    # Required by the Helm chart's HorizontalPodAutoscaler. EKS installs no
+    # metrics source by default, so without this the HPA reports
+    # "cpu: <unknown>/70%" and never scales -- the autoscaling the chart
+    # enables silently does nothing. Needs no IRSA role; it reads the
+    # kubelet's summary API, not an AWS API.
+    metrics-server = { most_recent = true }
     # service_account_role_arn wires up IRSA for the driver's controller
     # deployment (the part that calls the EC2 API to create/attach/delete
     # EBS volumes). Without it, the controller pods have no AWS credentials
