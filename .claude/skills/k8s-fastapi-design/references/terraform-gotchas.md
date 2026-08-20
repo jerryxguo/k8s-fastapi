@@ -26,6 +26,23 @@ An EKS access entry's `principal_arn` has to reference an IAM principal that can
 
 Keep `kubernetes_version` on whatever AWS currently has in standard support -- once a version's support window ends, its node-group AMIs stop being published, and `apply` starts failing with "Requested AMI for this version is not supported" even though nothing in the config changed. Check AWS's current EKS version support table before bumping. The rule that you can only upgrade one minor version at a time only applies to *upgrading* an existing cluster (`UpdateClusterVersion`) -- it is not a constraint on cluster creation. If you're destroying and recreating a cluster rather than upgrading it in place, you can jump straight to any currently-supported version.
 
+## An aggregated API add-on needs a node security group rule for its own port
+
+An add-on that registers an `APIService` (metrics-server, for one) is called by
+the *control plane*, inbound to the pod. Because the VPC CNI gives pods real VPC
+addresses, the API server dials the pod IP directly, so the node security group
+has to allow that port from the cluster security group. `terraform-aws-modules/eks`
+opens a recommended set (443, 4443, 6443, 8443, 9443, kubelet 10250) but the EKS
+metrics-server add-on serves on **10251**, which is not in it. The symptom is
+misleading: the add-on reports `ACTIVE`, its pods are `1/1 Running` (their own
+probe is a localhost check), and only the APIService reveals it --
+`Available=False`, `reason=FailedDiscoveryCheck`, with a timeout to
+`https://<pod-ip>:10251/apis/...`. Downstream it appears as the HPA reporting
+`cpu: <unknown>`. Fix with `node_security_group_additional_rules` and
+`source_cluster_security_group = true`. Check the add-on's real port
+(`--secure-port` in its deployment args) rather than assuming the upstream
+default.
+
 ## Cluster add-ons need their own IRSA role
 
 An EKS managed add-on that talks to AWS APIs (for example a CSI driver) needs a dedicated IAM role bound to its own service account via IRSA -- without it, its pods come up but crash-loop with an `UnauthorizedOperation` calling whatever AWS API they need, because they're falling back to the node's own (much narrower) instance role. This is easy to miss because the add-on itself creates successfully; the failure only shows up once its pods actually try to run.

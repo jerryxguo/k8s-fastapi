@@ -81,9 +81,9 @@ Each environment gets its own state and its own CI/CD IAM role.
 cd infra/terraform/live/dev   # or prod / shared
 cp terraform.tfvars.example terraform.tfvars   # fill in real values
 # The S3 state bucket for this environment's ACCOUNT must already exist --
-# Terraform cannot create the backend it is told to use. There is one
-# bucket per account, named k8s-demo-tfstate-<account-id>
-# infra/terraform/live/prod/backend.tf for the bootstrap commands.
+# Terraform cannot create the backend it is told to use. One bucket per
+# account, named k8s-demo-tfstate-<account-id>. See docs/DESIGN-NOTES.md
+# for the bootstrap commands.
 terraform init      # requires Terraform >= 1.10 (backend.tf uses use_lockfile)
 terraform plan
 terraform apply

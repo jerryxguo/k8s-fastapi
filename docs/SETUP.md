@@ -27,7 +27,8 @@ for p in shared-full dev-full prod-full; do aws sts get-caller-identity --profil
 
 One bucket per **account**, named `k8s-demo-tfstate-<account-id>`. Terraform
 cannot create the backend it is configured to use, so this is out of band.
-`dev` and `shared` share a bucket only because they share an account.
+Environments in the same account share a bucket; each `backend.tf` names the
+bucket for the account that environment runs in.
 
 ```bash
 ACCOUNT=<account-id>; PROFILE=<profile>; REGION=ap-southeast-2
@@ -171,11 +172,74 @@ make build  # cross-builds for linux/x86_64
 make run    # then: curl localhost:8080/healthcheck
 ```
 
+## Tearing it down
+
+Order matters more than it looks, and two steps fail confusingly if skipped.
+
+**1. Delete the app release first, while the ALB controller is still running.**
+The controller is what deletes the ALB. Destroy the cluster first and it dies
+with the cluster, leaving the ALB and its security groups orphaned, and the VPC
+destroy then fails with `DependencyViolation` on the leftover ENIs.
+
+```bash
+helm uninstall k8s-demo-service -n k8s-demo    # per environment
+aws elbv2 describe-load-balancers --profile <p> --region ap-southeast-2 \
+  --query 'LoadBalancers[].LoadBalancerName'   # wait until empty
+```
+
+**2. Set `secret_recovery_window_days = 0` before destroying, if you intend to
+re-apply.** Secrets Manager soft-deletes: the name stays reserved for the
+recovery window, and re-creating it fails with "already scheduled for
+deletion". `dev` already defaults to 0; `prod` defaults to 30. Apply the change
+first, then destroy. To recover from having skipped it:
+
+```bash
+aws secretsmanager restore-secret --secret-id <name> --profile <p>
+aws secretsmanager delete-secret --secret-id <name> --force-delete-without-recovery --profile <p>
+```
+
+**3. Destroy `dev` and `prod`, then `shared` last.** `shared` owns the ECR repo
+and the account's GitHub OIDC provider that `dev`'s IAM role trusts.
+
+**4. Empty ECR before destroying `shared`.** `modules/ecr-repo` sets no
+`force_delete`, so a non-empty repository refuses to delete:
+
+```bash
+aws ecr batch-delete-image --repository-name k8s-demo-shared/service-api \
+  --region ap-southeast-2 --profile shared-full \
+  --image-ids "$(aws ecr list-images --repository-name k8s-demo-shared/service-api \
+    --region ap-southeast-2 --profile shared-full --query imageIds --output json)"
+```
+
+If a destroy wedges because the cluster is already unreachable, drop the
+in-cluster resources from state rather than fighting it:
+
+```bash
+terraform state rm helm_release.cluster_secret_store helm_release.external_secrets \
+  helm_release.aws_load_balancer_controller \
+  kubernetes_namespace_v1.app kubernetes_namespace_v1.hyperion
+```
+
+**Not removed by `destroy`:** the state buckets (not Terraform-managed, and
+versioned, so emptying them means deleting every object *version*), the EKS
+KMS keys (scheduled for deletion on a 7-30 day window, not deleted), and the
+control-plane CloudWatch log groups.
+
+**After re-applying, refresh your kubeconfig.** `update-kubeconfig` keys the
+context by cluster ARN, which is identical across a destroy/recreate, so a
+rebuilt cluster silently inherits the old endpoint and `kubectl` fails with a
+DNS error that reads like a network problem:
+
+```bash
+aws eks update-kubeconfig --name <cluster> --region ap-southeast-2 --profile <p>
+```
+
 ## Known gaps
 
 - **TLS is not set up.** No ACM certificate is provisioned; both environments
   serve plain HTTP on `:80`. Set `APP_CERTIFICATE_ARN` once you own a real
   domain and the chart switches to HTTPS with a redirect.
-- **`live/prod` has never been applied.** Its state bucket does not exist yet.
+- **Node autoscaling is not set up.** The HPA scales pods; nothing scales
+  nodes. Node counts change only when `node_desired_size` does.
 - The `*.example.com` hosts in `values-dev.yaml`/`values-prod.yaml` are
   placeholders and need replacing with real DNS.

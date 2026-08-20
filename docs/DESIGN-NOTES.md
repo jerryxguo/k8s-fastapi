@@ -27,7 +27,14 @@ made, plus what you'd need to change to adapt this into a real service.
 - **Autoscaling by default.** The Helm chart enables a
   `HorizontalPodAutoscaler` (`infra/k8s/helm/fastapi-service/templates/hpa.yaml`)
   out of the box, since a static replica count is a common gap in simple
-  container deployments and is easy to get wrong by omission.
+  container deployments and is easy to get wrong by omission. An HPA is inert
+  without a metrics source, so Terraform installs the `metrics-server` EKS
+  add-on and opens the node security group on :10251 for it -- both are
+  required, and the manifest looks correct without either. Note the target is
+  70% of the container's CPU *requests*, not of the node, and CPU is a weak
+  signal for an async I/O-bound app: it may saturate on concurrency long
+  before CPU reaches the threshold. Pod autoscaling only; nothing scales
+  nodes (no Cluster Autoscaler or Karpenter).
 - **Secrets via AWS Secrets Manager + External Secrets Operator, not an
   app-level AWS SDK client.** `src/app/settings.py` is a plain
   `pydantic-settings` reader with zero AWS SDK calls -- secret sync happens
@@ -124,10 +131,8 @@ ID instead.
 
 - `admin_principal_arn` in `live/dev/terraform.tfvars` and
   `live/prod/terraform.tfvars` (`shared` has no EKS cluster, so it has no
-  `admin_principal_arn`). Only `prod` currently ships a
-  `terraform.tfvars.example`; `dev` and `shared` have real committed
-  `terraform.tfvars` files instead, which should be replaced with
-  `.example` counterparts and gitignored.
+  `admin_principal_arn`). Each environment ships a `terraform.tfvars.example`
+  to copy; `*.tfvars` is gitignored.
 - `shared_account_id` in both `live/dev/terraform.tfvars` and
   `live/prod/terraform.tfvars`, and `dev_account_id`/`prod_account_id` in
   `live/shared/terraform.tfvars`.
@@ -142,24 +147,11 @@ ID instead.
   named `k8s-demo-tfstate-<account-id>`. Each `live/<env>/backend.tf`
   already has an active (not commented-out) S3 backend block, and there is
   no DynamoDB lock table anywhere: locking uses the S3 backend's native
-  `use_lockfile`, which requires Terraform >= 1.10. `dev` and `shared`
-  share `k8s-demo-tfstate-621508399429` because they share an account;
-  `prod` uses `k8s-demo-tfstate-137982683245` in its own account. The bucket
+  `use_lockfile`, which requires Terraform >= 1.10. Each environment's
+  backend names the bucket for the account it runs in. The bucket
   must exist before the first `terraform init` -- Terraform cannot create the
-  backend it is configured to use. The prod bucket does not exist yet:
-
-  ```bash
-  aws s3api create-bucket --bucket k8s-demo-tfstate-137982683245 \
-    --region ap-southeast-2 \
-    --create-bucket-configuration LocationConstraint=ap-southeast-2 \
-    --profile prod-full
-  aws s3api put-bucket-versioning --bucket k8s-demo-tfstate-137982683245 \
-    --versioning-configuration Status=Enabled --profile prod-full
-  aws s3api put-public-access-block --bucket k8s-demo-tfstate-137982683245 \
-    --public-access-block-configuration \
-    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
-    --profile prod-full
-  ```
+  backend it is configured to use. See `docs/SETUP.md` step 1 for the
+  create-bucket commands.
 - Per-environment GitHub Environment variables/secrets: `AWS_ROLE_ARN`
   (the `cicd_role_arn` Terraform output) on all three; `AWS_REGION`,
   `EKS_CLUSTER_NAME`, `APP_IRSA_ROLE_ARN`, `ENVIRONMENT_SHORT` (`dev`/`prod`)

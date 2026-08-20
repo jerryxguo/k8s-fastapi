@@ -61,10 +61,11 @@
   no app. Terraform also creates a small number of *cluster-wide* objects,
   because they are shared by every workload rather than owned by one
   service's chart: the app and hyperion namespaces, the External Secrets
-  Operator, the AWS Load Balancer Controller, and the `ClusterSecretStore`
-  (via `infra/k8s/helm/cluster-secret-store`). The dividing line is
-  cluster-wide versus per-service, not Terraform versus Helm -- Terraform
-  uses Helm for two of those four.
+  Operator, the AWS Load Balancer Controller, metrics-server (an EKS managed
+  add-on), and the `ClusterSecretStore` (via
+  `infra/k8s/helm/cluster-secret-store`). The dividing line is cluster-wide
+  versus per-service, not Terraform versus Helm -- Terraform uses Helm for
+  two of those, and an EKS add-on for the third.
 - **`infra/k8s/helm/fastapi-service/`** -- everything that runs *inside* the
   cluster for this one service: Deployment, Service, Ingress, HPA,
   PodDisruptionBudget, ServiceAccount, ConfigMap, ExternalSecret. Deployed by
@@ -101,7 +102,17 @@ is no manual post-apply installation step:
    syncs the referenced Secrets Manager secret into a real Kubernetes
    `Secret`.
 
-Both are installed by Terraform, wired to their own IRSA roles
-(`external_secrets_irsa_role_arn`, and the ALB controller's role) via the
-service-account annotation each chart sets at install time. See
-`infra/k8s/README.md` for the detail.
+3. **metrics-server** -- serves `metrics.k8s.io`, which the
+   `HorizontalPodAutoscaler` reads. Installed as an EKS managed add-on rather
+   than a Helm chart. Two things are easy to miss: EKS installs no metrics
+   source by default, so without it the HPA reports `cpu: <unknown>/70%` and
+   never scales; and the add-on serves its aggregated API on **:10251**,
+   which is outside the port set the EKS module opens by default, so the node
+   security group needs an explicit rule or the APIService sits at
+   `Available=False / FailedDiscoveryCheck` while the pods look healthy.
+
+All three are installed by Terraform. The two Helm-based ones are wired to
+their own IRSA roles (`external_secrets_irsa_role_arn`, and the ALB
+controller's role) via the service-account annotation each chart sets at
+install time; metrics-server needs no AWS credentials, since it reads the
+kubelet rather than an AWS API. See `infra/k8s/README.md` for the detail.

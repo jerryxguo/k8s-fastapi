@@ -8,10 +8,6 @@ Compute infrastructure (VPC, EKS cluster, node group) is provisioned with well-a
 
 There is exactly one ECR repository, owned by a dedicated "shared" environment that has no VPC, no EKS cluster, and no application running in it -- just the ECR repo and the one GitHub OIDC role allowed to push to it. That environment's `ecr-repo` module grants cross-account pull to every other environment's account. Neither of the other environments' Terraform creates an ECR repository at all -- each references the shared repo's ARN directly, and each one's CI/CD role is created with `grant_ecr_push = false`. Only the shared environment's CI/CD role can push; every other environment can only describe/deploy.
 
-This is a deliberate tradeoff against the simpler alternative of folding the shared repo into one of the environments directly (avoiding a dedicated extra AWS account): a dedicated shared account means losing one environment doesn't take the registry down with it, and no environment that also runs a real workload doubles as the thing every other environment's deploy depends on.
-
-Caveat on the current state: that benefit is not actually being realised. `live/shared/terraform.tfvars` sets `dev_account_id` to the same account the shared state and ECR repo live in (`621508399429`), so "shared" is today a separate Terraform root inside dev's account rather than a separate account. The isolation argument above only holds once shared genuinely has its own account.
-
 ## GitHub OIDC -> per-environment IAM role
 
 Each environment gets its own IAM role, trusted only for that GitHub Environment via an OIDC subject condition, with a permission boundary restricting it to resources tagged with that environment's own name prefix. This caps the blast radius of a compromised or misconfigured CI/CD credential to just that one environment's own resources -- see `terraform-gotchas.md` for the exact subject-matching mechanics and how this fails silently if misconfigured.
