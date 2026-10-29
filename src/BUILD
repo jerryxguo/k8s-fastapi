@@ -5,4 +5,9 @@
 python_requirements(
     name="reqs",
     resolve="k8s_python_default",
+    # `kombu` (Celery's messaging layer, e.g. kombu.exceptions.OperationalError)
+    # is imported directly but installed only as a dependency of celery, which
+    # pins a compatible version. Mapping it here lets Pants infer the
+    # dependency without a second, separately-pinned requirement.
+    module_mapping={"celery": ["celery", "kombu"]},
 )

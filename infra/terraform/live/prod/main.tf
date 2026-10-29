@@ -41,6 +41,10 @@ module "eks" {
   node_max_size     = 6
   node_desired_size = 3
 
+  worker_node_min_size     = 2
+  worker_node_max_size     = 4
+  worker_node_desired_size = 2
+
   tags = local.tags
 }
 
@@ -87,6 +91,24 @@ resource "aws_secretsmanager_secret_version" "app" {
   lifecycle {
     ignore_changes = [secret_string]
   }
+}
+
+# Celery broker. API pods enqueue vulnerability payloads here; the Celery
+# worker Deployment (its own node group) consumes them. Primary + replica across AZs with automatic failover, and a week of
+# snapshots, so queued tasks survive a node or AZ loss.
+module "redis" {
+  source = "../../modules/elasticache-redis"
+
+  name_prefix                 = var.name_prefix
+  vpc_id                      = module.vpc.vpc_id
+  subnet_ids                  = module.vpc.private_subnet_ids
+  allowed_security_group_ids  = [module.eks.node_security_group_id]
+  node_type                   = "cache.t4g.small"
+  num_cache_clusters          = 2
+  snapshot_retention_limit    = 7
+  apply_immediately           = false
+  secret_recovery_window_days = var.secret_recovery_window_days
+  tags                        = local.tags
 }
 
 module "app_irsa" {

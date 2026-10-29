@@ -17,9 +17,17 @@ resources:
 env:
   APP_ENV: "production"
   APP_NAME_PREFIX: "k8s-demo-prod"
+  # Celery on ElastiCache Redis (module.redis in infra/terraform/live/prod).
+  # APP_REDIS_URL comes from externalSecret.redisSecretName below; pods fail
+  # settings validation at startup without it.
+  APP_QUEUE_BACKEND: "redis"
+
+worker:
+  replicaCount: 2
 
 externalSecret:
   secretsManagerName: "k8s-demo-prod/app-config"
+  redisSecretName: "k8s-demo-prod/redis"
 
 ingress:
   scheme: internal

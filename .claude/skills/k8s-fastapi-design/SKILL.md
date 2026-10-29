@@ -43,7 +43,7 @@ infra/k8s/helm/              The Kubernetes-side deploy (Deployment, Service,
 - **One shared ECR repository, owned by a dedicated account.** Every environment pulls the exact same image digest from one place; only the owning account's CI/CD role can push (`grant_ecr_push`). This is what makes "the same build is promoted unchanged through every environment" actually true -- see `references/architecture.md` for the tradeoffs.
 - **IRSA (IAM Roles for Service Accounts) per workload identity**, not a shared node-level role -- the app, the EBS CSI driver, and the External Secrets Operator each get their own narrowly-scoped IAM role federated to a specific Kubernetes ServiceAccount.
 - **Per-environment, per-repo GitHub OIDC roles**, each trusted only for one GitHub Environment and permission-boundary-scoped to that environment's own named resources.
-- **Secrets via Secrets Manager + External Secrets Operator**, not an in-app AWS SDK client -- application code stays free of cloud-specific dependencies.
+- **Secrets via Secrets Manager + External Secrets Operator**, not an in-app AWS SDK client -- secrets/config never need an AWS client in the app. Background work: FastAPI enqueues payloads on ElastiCache Redis (URL synced as a secret via ESO, no SDK) and a Celery worker Deployment consumes them on a dedicated, tainted `role=worker` node group; the worker has no IAM role.
 - **A single Pants resolve** for the whole project (app + test + lint/typecheck tooling) -- there's no second, genuinely incompatible dependency set that would justify a second resolve.
 
 Full rationale, including things that look over-engineered until you see the failure mode they prevent, is in `references/architecture.md`.

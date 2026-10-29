@@ -1,0 +1,15 @@
+{{- if and .Values.worker.enabled .Values.podDisruptionBudget.enabled }}
+# Keeps a worker-node drain from evicting every worker at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fastapi-service.worker.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fastapi-service.worker.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "fastapi-service.worker.selectorLabels" . | nindent 6 }}
+{{- end }}

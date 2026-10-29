@@ -53,6 +53,13 @@ env:
   APP_SERVICE_NAME: "k8s-demo-service"
   APP_NAME_PREFIX: "k8s-demo-dev"
   APP_LOG_LEVEL: "INFO"
+  # Celery broker (src/app/worker.py). "memory" runs tasks inline in the
+  # API; deployed environments set "redis" in values-<env>.yaml, with
+  # APP_REDIS_URL arriving via the ExternalSecret (externalSecret.redisSecretName).
+  APP_QUEUE_BACKEND: "memory"
+  # How long a running task stays reserved before Redis redelivers it.
+  # Must exceed the longest task, and worker.terminationGracePeriodSeconds.
+  APP_CELERY_VISIBILITY_TIMEOUT_SECONDS: "300"
 
 # Populated via External Secrets Operator from the Secrets Manager secret
 # Terraform creates (${name_prefix}/app-config). Leave enabled true even if
@@ -61,6 +68,9 @@ env:
 externalSecret:
   enabled: true
   secretsManagerName: "" # set per env, e.g. k8s-demo-dev/app-config
+  # Terraform-managed Celery broker URL secret (redis_secret_name output),
+  # e.g. k8s-demo-dev/redis. Empty skips it.
+  redisSecretName: ""
   refreshInterval: 1h
 
 ingress:
@@ -91,6 +101,47 @@ podLabels: {}
 
 nodeSelector:
   role: app
+
+# Celery worker Deployment (templates/worker-*.yaml): same image, runs
+# `celery -A app.worker worker` on the dedicated worker node group.
+worker:
+  enabled: true
+  replicaCount: 1
+  # Prefork processes per pod. Total parallel tasks = replicas x this.
+  concurrency: 2
+  logLevel: INFO
+  # Celery warm shutdown lets running tasks finish within this window.
+  terminationGracePeriodSeconds: 120
+  # Own ServiceAccount, no IRSA role: the worker only talks to Redis and
+  # needs no AWS permissions at all.
+  serviceAccount:
+    create: true
+    name: k8s-demo-service-worker
+  # `celery inspect ping` against this pod's own worker, via the broker.
+  # Spawns a Python process each time, so keep the period long. Fails if the
+  # worker is wedged or has lost its broker connection.
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 60
+    timeoutSeconds: 30
+    failureThreshold: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # Must match the worker node group's label and taint in
+  # infra/terraform/modules/eks-cluster/main.tf.
+  nodeSelector:
+    role: worker
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: worker
+      effect: NoSchedule
 
 tolerations: []
 affinity: {}

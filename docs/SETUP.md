@@ -12,7 +12,7 @@ somewhere other than where they were caused.
 | AWS CLI v2 | Terraform's `exec` auth for the kubernetes/helm providers, and bucket bootstrap | |
 | `kubectl` | inspecting the cluster | |
 | Helm | `make helm-lint` locally | CI installs its own |
-| Docker | `make build` / `make run` | not needed for `terraform apply` |
+| Docker | `make build`, `make run`, and `make dev` (Redis runs in a container) | not needed for `terraform apply` |
 | Pants launcher | everything under `make` | self-bootstraps the version `pants.toml` pins |
 
 Named AWS profiles must exist for each account. The defaults are
@@ -92,12 +92,15 @@ cd infra/terraform/live/dev  && terraform init && terraform apply
 cd infra/terraform/live/prod && terraform init && terraform apply
 ```
 
-Each builds a VPC, EKS cluster and node group, the IRSA roles, and installs
-the cluster-wide add-ons (External Secrets Operator, AWS Load Balancer
-Controller, the `ClusterSecretStore`) plus the app namespace. There is **no
-post-apply step and no two-pass bootstrap** — a single `apply` is enough.
+Each builds a VPC, an EKS cluster with two node groups (`role=app` for the
+API, a tainted `role=worker` group for the Celery worker), ElastiCache Redis
+with its `<name_prefix>/redis` Secrets Manager secret, and the IRSA roles,
+and installs the cluster-wide add-ons (External Secrets Operator, AWS Load
+Balancer Controller, the `ClusterSecretStore`) plus the app namespace. There
+is **no post-apply step and no two-pass bootstrap** — a single `apply` is
+enough.
 
-Expect 15-20 minutes for the EKS cluster.
+Expect 25-30 minutes: EKS takes 15-20, and ElastiCache adds roughly 10 more.
 
 **Check:**
 
@@ -106,6 +109,9 @@ aws eks update-kubeconfig --name "$(terraform output -raw cluster_name)" --regio
 kubectl get ns k8s-demo
 kubectl get clustersecretstore aws-secretsmanager
 kubectl -n kube-system get deploy aws-load-balancer-controller
+kubectl get nodes -L role                     # both app and worker nodes Ready
+terraform output redis_primary_endpoint
+aws secretsmanager describe-secret --secret-id "$(terraform output -raw redis_secret_name)" --profile <profile>
 ```
 
 ## 5. Populate the application secret
@@ -121,6 +127,16 @@ aws secretsmanager put-secret-value --secret-id k8s-demo-dev/app-config \
 
 Keys become environment variables on the pod. The app tolerates missing keys
 via pydantic defaults, so an empty secret is fine to start.
+
+Leave `<name_prefix>/redis` alone: Terraform writes it (the `APP_REDIS_URL`
+with the ElastiCache AUTH token), and a hand edit is overwritten by the next
+apply. Pods read `APP_REDIS_URL` only at start, so after the token changes,
+wait for External Secrets to sync (`refreshInterval`, 1h by default) and then
+restart **both** Deployments:
+
+```bash
+kubectl -n k8s-demo rollout restart deploy k8s-demo-service k8s-demo-service-worker
+```
 
 ## 6. Create the GitHub Environments
 
@@ -161,6 +177,20 @@ Open a PR (runs checks, builds, deploys to `development`, smoke-tests), or use
 **Actions -> manual-deploy-development -> Run workflow** and pick a branch.
 Merging to `main` promotes the same image through `development -> production`.
 
+**Check:** the pipeline's smoke test only hits `/healthcheck`, so confirm
+the worker by hand:
+
+```bash
+kubectl -n k8s-demo get deploy                # k8s-demo-service and k8s-demo-service-worker, all Ready
+kubectl -n k8s-demo port-forward svc/k8s-demo-service 8080:80 &
+curl -X POST localhost:8080/v1/vulnerabilities/ingest -H 'content-type: application/json' \
+  -d '{"scanner_id":"scanner-1","asset_id":"i-0abc123","cve_id":"CVE-2026-1234","severity":"HIGH","raw_metadata":{}}'
+kubectl -n k8s-demo logs deploy/k8s-demo-service-worker | grep processed
+```
+
+A 202 with a `task_id` and a matching `processed finding` line in the worker
+log means the API, Redis and the worker are all wired up.
+
 ## 9. Local development
 
 ```bash
@@ -168,8 +198,15 @@ make lock   # only when src/requirements.txt changes; commit the result
 make test
 make lint
 make build  # cross-builds for linux/x86_64
-make run    # then: curl localhost:8080/healthcheck
+make dev    # API + Celery worker on the host (live reload), Redis in Docker
+make run    # API + Celery worker + Redis as containers; then: curl localhost:8080/healthcheck
+make down   # remove the containers
 ```
+
+Both run tasks through a real Redis broker and a separate worker, so they
+exercise the queue, retries and the 503 path when the broker is down. Only
+the tests use the in-memory broker. The first `make dev` runs `pants export`
+to build its venv, which is slow; later runs reuse it.
 
 ## Known gaps
 

@@ -7,16 +7,21 @@ A FastAPI service deployed to AWS EKS via Terraform, built and packaged with Pan
 ```
 pants.toml, BUILD           Pants build config; root BUILD sets cross-cutting
                              __defaults__ for build environments
-src/app/                    FastAPI app + its pex_binary/docker_image targets
+Makefile, docker-compose.yml Local loop: `make dev` (host venv + Redis in
+                             Docker), `make run` (image + worker + Redis)
+src/app/                    FastAPI app + its pex_binary/docker_image targets;
+                             worker.py is the Celery app
+  service/                  Business logic shared by API and worker
 tests/                      pytest suite (its own Pants source root)
 infra/terraform/
   modules/                  Reusable, hand-written modules (vpc, eks-cluster,
-                             ecr-repo, github-oidc-cicd-role, irsa-role)
+                             ecr-repo, elasticache-redis,
+                             github-oidc-cicd-role, irsa-role)
   live/{dev,prod,shared}/    Per-environment root modules. "shared" owns only
                              the ECR repo + its own CI/CD push role. Apply
                              shared first, then dev/prod.
-infra/k8s/helm/              Kubernetes-side deploy (Deployment, Service,
-                             Ingress, HPA, ExternalSecret)
+infra/k8s/helm/              Kubernetes-side deploy (API + worker Deployments,
+                             PDBs, Service, Ingress, HPA, ExternalSecret)
 .github/workflows/            pull-request.yml, release.yml, and the reusable
                              workflows they call
 ```
@@ -27,6 +32,7 @@ infra/k8s/helm/              Kubernetes-side deploy (Deployment, Service,
 - **IRSA (IAM Roles for Service Accounts) per workload identity**, not a shared node-level role -- the app, the EBS CSI driver, and the External Secrets Operator each get their own narrowly-scoped IAM role federated to one specific Kubernetes ServiceAccount.
 - **Per-environment, per-repo GitHub OIDC roles**, each trusted only for one GitHub Environment and permission-boundary-scoped to that environment's own named resources -- caps the blast radius of a compromised or misconfigured CI/CD credential.
 - **Secrets via Secrets Manager + External Secrets Operator**, not an in-app AWS SDK client -- app code stays free of cloud-specific dependencies; secret sync happens out-of-band.
+- **Celery + ElastiCache Redis for background work; API and worker on separate node groups.** FastAPI enqueues the payload on Redis and returns 202; a Celery worker Deployment consumes it. Same image, two Deployments: API on `role=app` nodes, `celery -A app.worker worker` on a tainted `role=worker` node group. Business logic lives in `src/app/service/`, shared by both; tasks are thin wrappers. The Redis URL (with AUTH token) is a Terraform-managed Secrets Manager secret (`${name_prefix}/redis`) synced by ESO, so no AWS SDK in the app and no IAM role for the worker. Tests use a `memory://` broker with eager tasks; local runs (`make dev`, `make run`) always use real Redis.
 - **Everything CI/CD needs lives in this repository** -- composite actions/reusable workflows referenced by relative path, never another repo's floating ref.
 - **In-cluster smoke test** -- hits the ClusterIP Service directly from inside the cluster rather than needing a runner with access to an internal load balancer.
 - **A single Pants resolve** for the whole project (app + test + lint/typecheck tooling) -- no second, genuinely incompatible dependency set exists that would justify a second resolve.
@@ -57,6 +63,14 @@ infra/k8s/helm/              Kubernetes-side deploy (Deployment, Service,
 **Docker credential helper visibility.** Pants runs `docker build` in a sandboxed subprocess that doesn't inherit the full shell `PATH` -- a credential-store helper that resolves fine in a normal terminal can fail inside Pants's sandbox with "executable file not found in $PATH." Fix via `[docker].env_vars` passing `PATH` through, not reconfiguring Docker itself.
 
 **Lockfile is committed, not regenerated in CI.** Generated once and committed; CI has no step to regenerate it, so it must already be present for lint/test/package to resolve anything. Regenerate and recommit whenever the underlying requirements file changes.
+
+## Celery / Redis gotchas
+
+**Redis must not evict.** ElastiCache must use `maxmemory-policy noeviction` (the module's parameter group) -- the default can evict Celery's unacked-task keys and silently lose tasks. The local Redis in `docker-compose.yml` sets the same policy.
+
+**Visibility timeout vs. task length.** `APP_CELERY_VISIBILITY_TIMEOUT_SECONDS` must exceed the longest task (and the worker's termination grace period), or Redis redelivers a still-running task to a second worker; retry countdowns are held unacked, so `retry_backoff_max` stays well below it.
+
+**Deployment specifics.** `rediss://` needs `broker_use_ssl` set or Celery refuses to connect. Worker pods need a distinct `app.kubernetes.io/name`, or the API Service selector routes HTTP to them. Pods read `APP_REDIS_URL` only at start -- restart both Deployments after rotating the token.
 
 ## CI/CD gotchas
 

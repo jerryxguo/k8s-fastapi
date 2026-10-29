@@ -9,9 +9,17 @@ autoscaling:
 env:
   APP_ENV: "development"
   APP_NAME_PREFIX: "k8s-demo-dev"
+  # Celery on ElastiCache Redis (module.redis in infra/terraform/live/dev).
+  # APP_REDIS_URL comes from externalSecret.redisSecretName below; pods fail
+  # settings validation at startup without it.
+  APP_QUEUE_BACKEND: "redis"
+
+worker:
+  replicaCount: 1
 
 externalSecret:
   secretsManagerName: "k8s-demo-dev/app-config"
+  redisSecretName: "k8s-demo-dev/redis"
 
 ingress:
   scheme: internal

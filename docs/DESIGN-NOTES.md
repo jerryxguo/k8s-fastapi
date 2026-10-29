@@ -31,8 +31,32 @@ made, plus what you'd need to change to adapt this into a real service.
 - **Secrets via AWS Secrets Manager + External Secrets Operator, not an
   app-level AWS SDK client.** `src/app/settings.py` is a plain
   `pydantic-settings` reader with zero AWS SDK calls -- secret sync happens
-  out-of-band via the External Secrets Operator, so the application code
-  itself has no AWS-specific dependencies at all.
+  out-of-band via the External Secrets Operator, so secrets and config never
+  need an AWS client in the app.
+- **Background work via Celery + Redis, on its own node group.** The API
+  validates input and enqueues the payload on Redis
+  (`POST /v1/vulnerabilities/ingest` -> 202, or 503 if the broker is
+  unreachable so the sender retries); a separate Celery worker Deployment
+  consumes it. Both run the same image (the worker overrides the command to
+  `celery -A app.worker worker`) and share business logic in
+  `src/app/service/` -- tasks in `src/app/worker.py` are thin wrappers.
+  Workers run on a dedicated `worker` EKS node group (label `role=worker`,
+  taint `workload=worker:NoSchedule`) so heavy tasks never starve API pods.
+- **Redis is ElastiCache, not an in-cluster pod**
+  (`infra/terraform/modules/elasticache-redis`): queued tasks survive pod
+  and node churn, prod gets a cross-AZ replica with automatic failover plus
+  snapshots. TLS + AUTH token, reachable only from the EKS node security
+  group, `maxmemory-policy noeviction` (the default policy can silently evict
+  Celery's bookkeeping and lose tasks). The connection URL is a
+  Terraform-managed Secrets Manager secret synced by ESO like any other, so
+  the app still has no AWS SDK and the worker needs no IAM role at all.
+- **At-least-once task delivery; tasks must be idempotent.** `acks_late`
+  acks only once a task finishes, so a worker killed mid-task has its task
+  redelivered after the visibility timeout (300s). Task exceptions are
+  retried by Celery with exponential backoff. Findings use a deterministic
+  ID (asset + CVE) so reprocessing upserts rather than duplicates. Unlike
+  SQS there is no dead-letter queue: a task that exhausts its retries is
+  logged as failed and dropped.
 - **Everything CI/CD needs lives in this repository.** Every composite
   action and reusable workflow (`bootstrap-pants`, `generate-build-version`,
   `reusable-build-and-push.yml`, `reusable-deploy.yml`,

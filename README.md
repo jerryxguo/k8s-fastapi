@@ -1,7 +1,10 @@
 # k8s-demo-service
 
 An example FastAPI service, deployed to AWS EKS, with a full Terraform +
-Helm + GitHub Actions CI/CD pipeline -- **self-contained**: nothing in this
+Helm + GitHub Actions CI/CD pipeline. Background work goes through Celery on
+ElastiCache Redis: the API enqueues and returns 202, and a separate worker
+Deployment (same image, own node group) processes it. The repo is
+**self-contained**: nothing in this
 repo's pipeline depends on another repository. See `docs/DESIGN-NOTES.md`
 for the key design decisions and rationale, and `docs/ARCHITECTURE.md` for
 a component diagram.
@@ -10,6 +13,9 @@ a component diagram.
 
 ```
 pants.toml           Pants build system config
+Makefile             local entry points (`make dev`, `make run`, `make test`, ...)
+docker-compose.yml   API + worker + Redis containers for `make run`, and the
+                     Redis `make dev` uses
 src/                 Pants source root
   BUILD              python_requirements target parsed from requirements.txt
   requirements.txt   the one flat dependency list for this project's
@@ -20,14 +26,17 @@ src/                 Pants source root
   app/               FastAPI application (generic example endpoints), plus
                      the BUILD file with its pex_binary + docker_image targets
                      and the Dockerfile Pants builds from
+    worker.py        the Celery app and its tasks
+    service/         business logic shared by the API and the worker
 tests/               pytest suite, run via `pants test ::`
-infra/terraform/     AWS account-level infra: VPC, EKS, ECR, IAM/IRSA
+infra/terraform/     AWS account-level infra: VPC, EKS, ECR, ElastiCache
+                     Redis, IAM/IRSA
   modules/           reusable modules (this repo owns these outright --
                      nothing sourced from another repository)
   live/{dev,prod,shared}/   per-environment root modules -- "shared" owns
                      just the ECR repo + push role, nothing else runs there
-infra/k8s/helm/      the Kubernetes-side deploy: Deployment/Service/
-                     Ingress/HPA/ExternalSecret for this one service
+infra/k8s/helm/      the Kubernetes-side deploy: API and worker Deployments,
+                     PDBs, Service/Ingress/HPA/ExternalSecret
 .github/workflows/   pull-request.yml, release.yml, and the reusable
                      workflows they call
 .github/actions/     composite actions (bootstrap-pants, build-version) --
@@ -58,14 +67,31 @@ make lock      # whenever src/requirements.txt changes: pants generate-lockfiles
 make test      # pants test :: -- pytest, 85%+ coverage required
 make lint      # pants lint check :: -- black/isort/flake8 + mypy
 make fmt       # pants fmt :: -- auto-fixes black/isort
-make run       # pants package src/app:docker, then docker run on :8080
+make dev       # API (:8000) + Celery worker on the host with live reload,
+               # Redis in Docker
+make run       # pants package src/app:docker, then API + Celery worker +
+               # Redis as containers on :8080 (docker-compose.yml)
+make down      # remove the containers (including dev's Redis)
 ```
+
+Both run the deployed topology -- API and worker as separate processes with a
+real Redis broker between them. `make run` uses the built image
+(`API_PORT=8081 make run` if :8080 is taken; `docker compose logs -f worker`
+to watch tasks); `make dev` runs from the exported Pants venv for a faster
+edit loop (`DEV_PORT`, `REDIS_PORT` override the ports). The first `make dev`
+runs `pants export` to build that venv, which takes a while; later runs reuse
+it until `src/requirements.lock` or `pants.toml` changes.
 
 ```bash
 curl localhost:8080/healthcheck
 curl -X POST localhost:8080/v1/items -H 'content-type: application/json' -d '{"name":"widget"}'
 curl localhost:8080/v1/items
+# Queued: returns 202 with a task_id; the worker log shows it being processed.
+curl -X POST localhost:8080/v1/vulnerabilities/ingest -H 'content-type: application/json' \
+  -d '{"scanner_id":"scanner-1","asset_id":"i-0abc123","cve_id":"CVE-2026-1234","severity":"HIGH","raw_metadata":{}}'
 ```
+
+With `make dev`, use port 8000 instead of 8080.
 
 ## Setting up from scratch
 
@@ -82,8 +108,8 @@ cd infra/terraform/live/dev   # or prod / shared
 cp terraform.tfvars.example terraform.tfvars   # fill in real values
 # The S3 state bucket for this environment's ACCOUNT must already exist --
 # Terraform cannot create the backend it is told to use. There is one
-# bucket per account, named k8s-demo-tfstate-<account-id>
-# infra/terraform/live/prod/backend.tf for the bootstrap commands.
+# bucket per account, named k8s-demo-tfstate-<account-id> -- see
+# docs/SETUP.md step 1 for the bootstrap commands.
 terraform init      # requires Terraform >= 1.10 (backend.tf uses use_lockfile)
 terraform plan
 terraform apply
@@ -95,14 +121,9 @@ environment pulls the same image from (see "ECR strategy" in
 `dev` and `prod`, passing the shared account's ID into each one's
 `shared_account_id` tfvar.
 
-`terraform init -backend=false && terraform validate` has since been run
-against all three roots (`dev`, `prod`, `shared`) and passes. `terraform
-plan`/`apply` have still never been run, so anything that only surfaces
-against real AWS state or a real account remains unverified -- run `plan`
-yourself before the first `apply`. `make helm-lint`, `make test` and `make lint` also pass. The one step never
-exercised is `make build`, which resolves and packages for `linux/x86_64` --
-run it once before trusting CI. See `docs/DESIGN-NOTES.md`'s "Validation
-caveat".
+`terraform validate` (`make tf-validate`) runs in CI against all three
+roots, but `live/prod` has never been applied -- run `plan` yourself before
+its first `apply`. See `docs/DESIGN-NOTES.md`'s "Validation caveat".
 
 There is no post-apply step. Terraform installs the two cluster-wide
 add-ons the app chart depends on (AWS Load Balancer Controller, External
@@ -149,7 +170,6 @@ workflow YAML).
   concurrency group, so two open PRs can't both `helm upgrade` the same
   release and leave the smoke test reporting on someone else's image.
 - Third-party actions are pinned to commit SHAs, not floating tags.
-
 - **`manual-deploy-development.yml`** -- deploy any branch to `development`
   on demand. See below.
 

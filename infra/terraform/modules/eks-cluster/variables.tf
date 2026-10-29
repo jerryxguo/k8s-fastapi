@@ -51,6 +51,33 @@ variable "node_capacity_type" {
   default = "ON_DEMAND"
 }
 
+# Celery worker node group (see eks_managed_node_groups.worker in main.tf).
+variable "worker_node_min_size" {
+  type    = number
+  default = 1
+}
+
+variable "worker_node_max_size" {
+  type    = number
+  default = 3
+}
+
+variable "worker_node_desired_size" {
+  type    = number
+  default = 1
+}
+
+variable "worker_node_instance_types" {
+  type    = list(string)
+  default = ["t3.medium"]
+}
+
+variable "worker_node_capacity_type" {
+  description = "ON_DEMAND or SPOT. Workers tolerate interruption better than the API (unfinished tasks are redelivered), so SPOT is a reasonable cost lever here."
+  type        = string
+  default     = "ON_DEMAND"
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

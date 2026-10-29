@@ -51,11 +51,14 @@
 
 ## Component ownership
 
-- **`src/app/`** -- the FastAPI service itself. No AWS SDK calls; reads
-  configuration purely from environment variables (populated by a
-  ConfigMap + a Secret synced from Secrets Manager).
+- **`src/app/`** -- the FastAPI service itself. Reads configuration purely
+  from environment variables (populated by a ConfigMap + a Secret synced
+  from Secrets Manager). Runs as two Deployments from one image: the API
+  (gunicorn, `role=app` nodes) and the Celery worker (`celery -A app.worker`,
+  dedicated `role=worker` nodes), connected through an ElastiCache Redis
+  broker. No AWS SDK calls; the Redis URL is just another synced secret.
 - **`infra/terraform/`** -- the AWS-account level, plus cluster *bootstrap*.
-  `dev` and `prod` each get a VPC, EKS cluster + node group, IAM (CI/CD OIDC
+  `dev` and `prod` each get a VPC, EKS cluster + two node groups (`app` for the API, tainted `worker` for Celery), ElastiCache Redis (Celery broker), IAM (CI/CD OIDC
   role, IRSA roles), and one placeholder Secrets Manager secret; `shared`
   gets only the ECR repo and a push-only CI/CD OIDC role -- no VPC, no EKS,
   no app. Terraform also creates a small number of *cluster-wide* objects,

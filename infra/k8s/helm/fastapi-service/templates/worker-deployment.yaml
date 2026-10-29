@@ -1,0 +1,116 @@
+{{- if .Values.worker.enabled }}
+# Celery worker: consumes the vulnerability payloads the API enqueues on
+# Redis. Same image and config as the API, different command, on its own
+# node group (role=worker, tainted workload=worker:NoSchedule -- see
+# eks_managed_node_groups.worker in infra/terraform/modules/eks-cluster).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fastapi-service.worker.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "fastapi-service.worker.labels" . | nindent 4 }}
+spec:
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fastapi-service.worker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fastapi-service.worker.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "fastapi-service.worker.serviceAccountName" . }}
+      # SIGTERM triggers Celery's warm shutdown: stop taking messages, let
+      # running tasks finish. A task still running when this expires is
+      # killed and, with acks_late, redelivered after the visibility timeout
+      # -- safe because tasks are idempotent, but wasted work. Size this to
+      # the typical longest task.
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image's entrypoint runs gunicorn; the venv also carries the
+          # celery console script.
+          command: ["/opt/app/bin/celery"]
+          args:
+            - "--app=app.worker"
+            - "worker"
+            - "--loglevel={{ .Values.worker.logLevel }}"
+            - "--concurrency={{ .Values.worker.concurrency }}"
+            # Worker-to-worker chatter this deployment doesn't use; skipping
+            # it cuts broker traffic and startup time. Remote control stays
+            # on -- the liveness probe below needs it.
+            - "--without-gossip"
+            - "--without-mingle"
+          envFrom:
+            - configMapRef:
+                name: {{ include "fastapi-service.fullname" . }}-config
+            {{- if .Values.externalSecret.enabled }}
+            - secretRef:
+                name: {{ include "fastapi-service.fullname" . }}-secret
+                optional: true
+            {{- end }}
+          # No readiness probe: the worker serves no traffic. Liveness pings
+          # this pod's own worker node through the broker.
+          {{- with .Values.worker.livenessProbe }}
+          {{- if .enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - /opt/app/bin/celery --app=app.worker inspect ping --destination "celery@${HOSTNAME}" --timeout 10
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+      {{- if .Values.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.zoneMaxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "fastapi-service.worker.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

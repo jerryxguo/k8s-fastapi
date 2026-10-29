@@ -36,6 +36,10 @@ module "eks" {
   node_max_size     = 3
   node_desired_size = 2
 
+  worker_node_min_size     = 1
+  worker_node_max_size     = 2
+  worker_node_desired_size = 1
+
   tags = local.tags
 }
 
@@ -85,6 +89,23 @@ resource "aws_secretsmanager_secret_version" "app" {
   lifecycle {
     ignore_changes = [secret_string]
   }
+}
+
+# Celery broker. API pods enqueue vulnerability payloads here; the Celery
+# worker Deployment (its own node group) consumes them. Single node, no snapshots: dev is torn down and rebuilt.
+module "redis" {
+  source = "../../modules/elasticache-redis"
+
+  name_prefix                 = var.name_prefix
+  vpc_id                      = module.vpc.vpc_id
+  subnet_ids                  = module.vpc.private_subnet_ids
+  allowed_security_group_ids  = [module.eks.node_security_group_id]
+  node_type                   = "cache.t4g.micro"
+  num_cache_clusters          = 1
+  snapshot_retention_limit    = 0
+  apply_immediately           = true
+  secret_recovery_window_days = var.secret_recovery_window_days
+  tags                        = local.tags
 }
 
 module "app_irsa" {

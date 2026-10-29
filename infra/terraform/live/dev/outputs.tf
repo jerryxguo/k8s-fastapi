@@ -18,6 +18,14 @@ output "app_irsa_role_arn" {
   value = module.app_irsa.role_arn
 }
 
+output "redis_primary_endpoint" {
+  value = module.redis.primary_endpoint_address
+}
+
+output "redis_secret_name" {
+  value = module.redis.secret_name
+}
+
 output "external_secrets_irsa_role_arn" {
   value = module.external_secrets_irsa.role_arn
 }

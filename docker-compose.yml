@@ -1,0 +1,58 @@
+# Local run of the deployed topology: API and Celery worker as separate
+# containers from the same image, with a real Redis broker between them.
+# Use `make run` (builds the image first) and `make down`.
+#
+# Still differs from EKS: plain redis:// (no TLS / auth token), no probes,
+# no resource limits.
+
+x-app: &app
+  image: k8s-demo-shared/service-api:latest
+  # Built by Pants (`make build`), never pulled.
+  pull_policy: never
+  platform: linux/amd64
+  environment:
+    APP_ENV: local
+    APP_LOG_LEVEL: INFO
+    APP_QUEUE_BACKEND: redis
+    APP_REDIS_URL: redis://redis:6379/0
+    APP_CELERY_VISIBILITY_TIMEOUT_SECONDS: "300"
+  # Same filesystem constraints as the pods' securityContext.
+  read_only: true
+  tmpfs:
+    - /tmp
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    # noeviction, as on ElastiCache: eviction could drop unacked task keys.
+    command: ["redis-server", "--maxmemory-policy", "noeviction"]
+    # Loopback only: for `make dev`, whose API and worker run on the
+    # host. Containers in this file reach it as redis:6379 regardless.
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  api:
+    <<: *app
+    ports:
+      - "${API_PORT:-8080}:8080"
+
+  worker:
+    <<: *app
+    entrypoint: ["/opt/app/bin/celery"]
+    command:
+      - --app=app.worker
+      - worker
+      - --loglevel=INFO
+      - --concurrency=2
+      - --without-gossip
+      - --without-mingle
+    # Celery's warm shutdown: let running tasks finish, as in the chart.
+    stop_grace_period: 120s

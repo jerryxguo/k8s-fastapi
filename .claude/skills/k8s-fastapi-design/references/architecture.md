@@ -32,7 +32,7 @@ The general lesson: `readOnlyRootFilesystem: true` is worth keeping, but never a
 
 ## Secrets via Secrets Manager + External Secrets Operator
 
-Application settings are read via a plain settings object with zero direct AWS SDK calls -- secret sync happens out-of-band via the External Secrets Operator, so application code carries no cloud-provider-specific dependency at all.
+Application settings are read via a plain settings object with zero direct AWS SDK calls -- secret sync happens out-of-band via the External Secrets Operator, so settings code carries no cloud-provider-specific dependency. The Celery broker (ElastiCache Redis) follows the same pattern: its URL is a Terraform-managed secret synced by ESO. API and Celery worker run the same image as two Deployments on separate node groups (`role=app` vs tainted `role=worker`); the API enqueues payloads on Redis and the worker consumes them.
 
 ## Everything CI/CD needs lives in this repository
 

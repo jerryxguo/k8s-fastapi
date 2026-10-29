@@ -114,6 +114,32 @@ module "eks" {
         "role" = "app"
       }
     }
+
+    # Dedicated nodes for the Celery worker Deployment, so long-running or
+    # CPU-heavy background tasks never compete with API pods for CPU/memory.
+    # The label is what the worker's nodeSelector targets; the taint keeps
+    # everything else (API pods, add-ons like CoreDNS) off these nodes. Only
+    # pods tolerating it schedule here -- the worker Deployment, plus
+    # DaemonSets that tolerate all taints (vpc-cni, kube-proxy).
+    worker = {
+      min_size       = var.worker_node_min_size
+      max_size       = var.worker_node_max_size
+      desired_size   = var.worker_node_desired_size
+      instance_types = var.worker_node_instance_types
+      capacity_type  = var.worker_node_capacity_type
+
+      labels = {
+        "role" = "worker"
+      }
+
+      taints = {
+        worker = {
+          key    = "workload"
+          value  = "worker"
+          effect = "NO_SCHEDULE"
+        }
+      }
+    }
   }
 
   # Grant the Terraform caller and the CI/CD role cluster-admin via the
